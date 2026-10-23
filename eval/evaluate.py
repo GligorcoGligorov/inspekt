@@ -94,10 +94,10 @@ def main() -> int:
     # The public corpora must never be sent to an external LLM (licences and
     # privacy): with the grey-zone review configured, only our own samples
     # may be evaluated.
-    llm = os.environ.get("INSPEKT_LLM_MODEL") or os.environ.get("INSPEKT_LLM_BASE_URL")
+    llm = os.environ.get("INSPEKT_LLM_ENABLED") == "true"
     data_dir = (ROOT / "data").resolve()
     if llm and any(p.resolve().is_relative_to(data_dir) for p, _, _ in items):
-        ap.error("refusing to send public-corpus messages to an LLM: unset INSPEKT_LLM_* "
+        ap.error("refusing to send public-corpus messages to an LLM: unset INSPEKT_LLM_ENABLED "
                  "or evaluate only testdata/ (e.g. --labels testdata/bec/labels.csv)")
 
     cli = build_cli()
@@ -118,12 +118,15 @@ def main() -> int:
             "verdict": rep["verdict"],
             "score": rep["score"],
             "signals": [s["id"] for s in rep["signals"]],
+            # Kept for the grey-zone review: the model's reasons, or why it
+            # was unavailable (e.g. a malformed answer).
+            "review": [f'{s["id"]}: {"; ".join(s["evidence"])}' for s in rep["signals"] if s["id"].startswith("llm_")],
         })
 
     cm = confusion(results, args.positive_at)
     summary = {
         "engine": next(iter(reports.values()))["engine"] if reports else "n/a",
-        "llm_review": os.environ.get("INSPEKT_LLM_MODEL") or "off",
+        "llm_review": os.environ.get("INSPEKT_LLM_MODEL", "?") if os.environ.get("INSPEKT_LLM_ENABLED") == "true" else "off",
         "messages": len(items),
         "parse_errors": len(errors),
         "positive_at": args.positive_at,

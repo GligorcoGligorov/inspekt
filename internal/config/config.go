@@ -44,8 +44,10 @@ func Int(k string, def int) (int, error) {
 //
 //	INSPEKT_TRUSTED_AUTHSERV_IDS  comma-separated authserv-ids to believe
 //	INSPEKT_AUTH_MODE             headers (default) or verify
-//	INSPEKT_LLM_BASE_URL          OpenAI-compatible endpoint; with _MODEL set,
-//	INSPEKT_LLM_MODEL             enables the grey-zone LLM review (off by default)
+//	INSPEKT_LLM_ENABLED           must be "true" for the grey-zone LLM review to run;
+//	                              anything else keeps it off, even with a key set
+//	INSPEKT_LLM_BASE_URL          OpenAI-compatible endpoint (required when enabled)
+//	INSPEKT_LLM_MODEL             model id (required when enabled)
 //	INSPEKT_LLM_API_KEY           bearer token (not needed for a local Ollama)
 //	INSPEKT_LLM_PER_MINUTE        calls per minute, all processes (default 4)
 //	INSPEKT_LLM_DAILY_CAP         calls per UTC day, all processes (default 100)
@@ -70,12 +72,14 @@ func Engine(rdb *redis.Client) (analyze.Config, error) {
 		return cfg, fmt.Errorf("INSPEKT_AUTH_MODE must be headers or verify, got %q", mode)
 	}
 
-	base, model := os.Getenv("INSPEKT_LLM_BASE_URL"), os.Getenv("INSPEKT_LLM_MODEL")
-	if base == "" && model == "" {
+	// An explicit switch, separate from the credentials: a key sitting in
+	// .env must never be enough to start sending mail to a third party.
+	if !LLMEnabled() {
 		return cfg, nil
 	}
+	base, model := os.Getenv("INSPEKT_LLM_BASE_URL"), os.Getenv("INSPEKT_LLM_MODEL")
 	if base == "" || model == "" {
-		return cfg, errors.New("INSPEKT_LLM_BASE_URL and INSPEKT_LLM_MODEL must be set together")
+		return cfg, errors.New("INSPEKT_LLM_ENABLED=true needs INSPEKT_LLM_BASE_URL and INSPEKT_LLM_MODEL")
 	}
 	daily, err := Int("INSPEKT_LLM_DAILY_CAP", 100)
 	if err != nil {
@@ -102,13 +106,16 @@ func Engine(rdb *redis.Client) (analyze.Config, error) {
 	return cfg, nil
 }
 
+// LLMEnabled reports whether INSPEKT_LLM_ENABLED is exactly "true".
+func LLMEnabled() bool { return os.Getenv("INSPEKT_LLM_ENABLED") == "true" }
+
 // LLM describes the grey-zone review setting for start-up logs, without
 // the key.
 func LLM() string {
-	if m := os.Getenv("INSPEKT_LLM_MODEL"); m != "" {
-		return m + " @ " + os.Getenv("INSPEKT_LLM_BASE_URL")
+	if !LLMEnabled() {
+		return "off"
 	}
-	return "off"
+	return os.Getenv("INSPEKT_LLM_MODEL") + " @ " + os.Getenv("INSPEKT_LLM_BASE_URL")
 }
 
 // AuthMode is INSPEKT_AUTH_MODE with its default applied.

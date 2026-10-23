@@ -208,7 +208,16 @@ second opinion.
 INSPEKT_LLM_BASE_URL=https://api.groq.com/openai/v1
 INSPEKT_LLM_MODEL=openai/gpt-oss-20b
 INSPEKT_LLM_API_KEY=gsk_...
+
+# Credentials alone do nothing. The review runs only with an explicit switch:
+INSPEKT_LLM_ENABLED=true docker compose up -d
 ```
+
+- **Off unless switched on:** every binary (API, worker, CLI) ignores the
+  LLM settings unless `INSPEKT_LLM_ENABLED=true` is set, and compose defaults
+  it to `false`. Keeping a key in `.env` is therefore safe: a load test or a
+  demo cannot send mail to the provider by accident. Leave the switch out of
+  `.env` and set it per command when you mean it.
 
 - **Only the grey zone:** score 10–69 and no attachments. Everything else
   never reaches the model.

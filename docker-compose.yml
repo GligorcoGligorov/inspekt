@@ -67,7 +67,9 @@ services:
       INSPEKT_MARIADB_DSN: "inspekt:${INSPEKT_DB_PASSWORD:-inspekt-dev}@tcp(mariadb:3306)/inspekt"
       INSPEKT_TRUSTED_AUTHSERV_IDS: ""   # e.g. mx.yourcompany.com in production
       INSPEKT_AUTH_MODE: headers         # verify = own SPF/DKIM/DMARC via DNS
-      # Grey-zone LLM review: off unless set (see .env.example).
+      # Grey-zone LLM review: OFF unless INSPEKT_LLM_ENABLED=true is set
+      # explicitly. A key in .env alone does nothing (see .env.example).
+      INSPEKT_LLM_ENABLED: ${INSPEKT_LLM_ENABLED:-false}
       INSPEKT_LLM_BASE_URL: ${INSPEKT_LLM_BASE_URL:-}
       INSPEKT_LLM_MODEL: ${INSPEKT_LLM_MODEL:-}
       INSPEKT_LLM_API_KEY: ${INSPEKT_LLM_API_KEY:-}
@@ -85,7 +87,9 @@ services:
       INSPEKT_MARIADB_DSN: "inspekt:${INSPEKT_DB_PASSWORD:-inspekt-dev}@tcp(mariadb:3306)/inspekt"
       INSPEKT_WORKERS: "4"
       INSPEKT_METRICS_ADDR: ":9090"      # scraped by Prometheus (not published)
-      # Grey-zone LLM review: off unless set (see .env.example).
+      # Grey-zone LLM review: OFF unless INSPEKT_LLM_ENABLED=true is set
+      # explicitly. A key in .env alone does nothing (see .env.example).
+      INSPEKT_LLM_ENABLED: ${INSPEKT_LLM_ENABLED:-false}
       INSPEKT_LLM_BASE_URL: ${INSPEKT_LLM_BASE_URL:-}
       INSPEKT_LLM_MODEL: ${INSPEKT_LLM_MODEL:-}
       INSPEKT_LLM_API_KEY: ${INSPEKT_LLM_API_KEY:-}
