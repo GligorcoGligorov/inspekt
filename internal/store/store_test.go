@@ -80,6 +80,11 @@ func TestMemory(t *testing.T) { contract(t, &Memory{}) }
 func TestMariaDB(t *testing.T) {
 	dsn := os.Getenv("INSPEKT_TEST_MARIADB_DSN")
 	if dsn == "" {
+		// In CI a missing DSN means a broken workflow, not "no database
+		// here": fail rather than let the real-database tests silently skip.
+		if os.Getenv("CI") != "" {
+			t.Fatal("INSPEKT_TEST_MARIADB_DSN not set in CI")
+		}
 		t.Skip("INSPEKT_TEST_MARIADB_DSN not set; run `make test-db`")
 	}
 	db, err := Open(dsn)
