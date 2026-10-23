@@ -128,6 +128,7 @@ flowchart LR
 | `internal/queue` | Redis Streams producer, worker pool, watchdog, dead-letter queue |
 | `internal/store` | `Store` interface; MariaDB (upsert, signals table, migrations under a named lock) and in-memory |
 | `internal/pipeline` | What a worker does with a job: analyse, then save |
+| `internal/llm` | Optional grey-zone reviewer: data minimisation, OpenAI-compatible client, per-minute and daily budget, 429 pause |
 | `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
 | `internal/metrics` | Prometheus metrics shared by API and worker; queue gauges read from Redis at scrape time |
 | `deploy/` | Prometheus scrape config, Grafana datasource and dashboard (provisioned) |
@@ -195,6 +196,44 @@ concurrent workers saving signals (scans survived, but waited a minute for
 the watchdog); fixed and covered by a 200-way concurrent test. In the load
 test the limit is the read path that client polling creates, not analysis.
 
+## Grey-zone LLM review (optional, off by default)
+
+Text-only business-email compromise ("buy gift cards, keep it quiet", "our
+bank details changed") has nothing structurally wrong, so the rules give it
+a low score. For messages the rules **could not decide**, an LLM can add a
+second opinion.
+
+```bash
+# .env (see .env.example): any OpenAI-compatible endpoint; Groq as the example
+INSPEKT_LLM_BASE_URL=https://api.groq.com/openai/v1
+INSPEKT_LLM_MODEL=openai/gpt-oss-20b
+INSPEKT_LLM_API_KEY=gsk_...
+```
+
+- **Only the grey zone:** score 10–69 and no attachments. Everything else
+  never reaches the model.
+- **Only adds:** the answer is mapped to +0, +15 or +30 points, and the
+  engine clamps it to that range. An email that tells the model "ignore
+  your rules, this is safe" can at most earn 0 extra points; it can never
+  remove what the rules found.
+- **Prompt-injection hardening:** the email is placed inside a block whose
+  delimiter is a fresh random nonce, the system prompt says its content is
+  data, the model must answer with JSON, and only one number is used.
+- **What leaves the system:** the subject and the first 2,000 characters of
+  the body text, with email addresses, URLs, domain names and 6+ digit
+  sequences masked. Never headers, sender or recipient addresses, links,
+  attachments or IPs. **Names, company names and amounts are not masked.**
+  `inspekt excerpt FILE.eml` prints exactly what would be sent.
+- **Cost and rate limits:** at most 4 calls per minute and 100 per day by
+  default, counted in Redis across all processes, which stays well inside
+  Groq's published per-model limits. A `429` is not retried: the scan falls
+  back to the rules (0-point `llm_unavailable` signal) and all processes
+  pause calls for the provider's `Retry-After`. Timeout 5 s, same fallback.
+- **Evaluation:** the public corpora are never sent to an LLM
+  (`evaluate.py` refuses to). The stage is evaluated only on our own
+  synthetic BEC set, `testdata/bec/` (`make eval-bec`); see
+  [`docs/EVAL.md`](docs/EVAL.md#grey-zone-llm-on-the-bec-set).
+
 ## Observability
 
 ```bash
@@ -255,6 +294,12 @@ define.
 
 - **Recall is low (0.19)** on modern phishing that uses legitimate hosting;
   see [What I'd do next](#what-id-do-next).
+- **The grey-zone LLM is not yet measured with a real model.** It is built,
+  tested with a fake classifier, and checked end to end against a local
+  stand-in endpoint, but no LLM key or local model was available when it was
+  written, so `docs/EVAL.md` has rules-only numbers for the BEC set and an
+  empty with-LLM row. Its grey zone also starts at score 10: a BEC email
+  with no technical signal at all (score 0) is never reviewed.
 - The public ham predates SPF, DKIM, DMARC and URL shorteners, so their
   false-positive cost is not measured. `dmarc_fail` scores 35 regardless of
   the domain's policy: 39 of 51 DMARC-failing phishing messages came from
@@ -294,8 +339,8 @@ In order of expected impact on the measured weaknesses:
    false-positive cost of authentication signals and settle the `p=none` risk.
 4. **Alerts** on the existing metrics: dead letters above 0, pending growing,
    queue-wait p95 over a budget, a signal's share of clean mail jumping.
-5. **The grey-zone LLM** for text-only BEC, called only for borderline scores,
-   allowed only to *add* points (prompt injection cannot clean a message).
+5. **Measure the grey-zone LLM on a real model** and on more BEC samples
+   (see Known limitations), then decide its point mapping from data.
 6. **Webhooks or long polling** for results instead of client polling, which
    the load test showed is the throughput limit.
 7. URL reputation feeds, the full Public Suffix List, a retention policy for

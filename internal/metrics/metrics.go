@@ -42,6 +42,13 @@ var (
 		Help: "Worker results per delivery: done, failed (permanent), retry (transient error), dead (dead-lettered)."},
 		[]string{"outcome"})
 
+	// Grey-zone LLM review.
+	LLMCalls = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inspekt_llm_calls_total", Help: "Grey-zone LLM reviews by result: ok, error, timeout, rate_limited, capped."}, []string{"result"})
+	LLMDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "inspekt_llm_duration_seconds", Help: "Time per grey-zone LLM review, including failures.",
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 9)}) // 50 ms .. 12.8 s
+
 	// API.
 	ScanFailures = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "inspekt_scan_failures_total", Help: "Requests rejected by the API (bad input, too large, queue unavailable)."})
@@ -74,6 +81,12 @@ func ObserveReport(rep *analyze.Report, took time.Duration) {
 // ObserveOutcome is the queue.Worker Observe hook.
 func ObserveOutcome(outcome string) { Outcomes.WithLabelValues(outcome).Inc() }
 
+// ObserveLLM is the llm.Reviewer Observe hook.
+func ObserveLLM(result string, d time.Duration) {
+	LLMCalls.WithLabelValues(result).Inc()
+	LLMDuration.Observe(d.Seconds())
+}
+
 // Every verdict and outcome series exists from the start (at 0), so rates
 // and dashboards work before the first event of each kind.
 func init() {
@@ -82,6 +95,9 @@ func init() {
 	}
 	for _, o := range []string{"done", "failed", "retry", "dead"} {
 		Outcomes.WithLabelValues(o)
+	}
+	for _, r := range []string{"ok", "error", "timeout", "rate_limited", "capped"} {
+		LLMCalls.WithLabelValues(r)
 	}
 }
 

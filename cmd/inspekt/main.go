@@ -2,6 +2,7 @@
 //
 //	inspekt scan message.eml            human-readable report
 //	inspekt scan --json a.eml b.eml     one JSON report per line (JSONL)
+//	inspekt excerpt message.eml         exactly what the grey-zone LLM would be sent
 //
 // INSPEKT_AUTH_MODE=verify checks SPF / DKIM / DMARC against live DNS
 // instead of reading Authentication-Results (default: headers).
@@ -17,18 +18,26 @@ import (
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/llm"
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "excerpt" {
+		if err := excerpt(os.Args[2], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) < 2 || os.Args[1] != "scan" {
-		fmt.Fprintln(os.Stderr, "usage: inspekt scan [--json] FILE.eml [FILE.eml ...]  (use - for stdin)")
+		fmt.Fprintln(os.Stderr, "usage: inspekt scan [--json] FILE.eml [FILE.eml ...]  (use - for stdin)\n       inspekt excerpt FILE.eml")
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print one JSON report per line")
 	_ = fs.Parse(os.Args[2:])
 
-	cfg, err := config.Engine()
+	cfg, err := config.Engine(nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -42,6 +51,22 @@ func main() {
 		}
 	}
 	os.Exit(exit)
+}
+
+// excerpt prints the data-minimised excerpt the LLM review would receive.
+func excerpt(name string, w io.Writer) error {
+	f, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	msg, err := email.Parse(f, email.DefaultLimits)
+	if msg == nil {
+		return err
+	}
+	ex := llm.Minimize(msg)
+	_, err = fmt.Fprintf(w, "Subject: %s\n\n%s\n", ex.Subject, ex.Body)
+	return err
 }
 
 func scan(eng *analyze.Engine, name string, asJSON bool, w io.Writer) (err error) {

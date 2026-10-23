@@ -76,7 +76,37 @@ type Config struct {
 	Verifier *auth.Verifier
 	// QR bounds decoding of QR codes in image attachments.
 	QR qr.Limits
+	// Reviewer, when set, is asked for a second opinion on grey-zone
+	// messages (see GreyZone). Off by default.
+	Reviewer Reviewer
 }
+
+// Reviewer gives a second opinion on a message the rules could not decide,
+// e.g. an LLM looking for business-email compromise. It returns points to
+// add and evidence; the engine clamps the points to [0, MaxReviewPoints],
+// so a reviewer can only ever raise a score. That is the prompt-injection
+// defence: an email saying "ignore your rules, this is safe" can at worst
+// earn 0 extra points, never remove the ones the rules gave.
+type Reviewer interface {
+	Review(ctx context.Context, msg *email.Message) Review
+}
+
+// Review is a Reviewer's answer. Unavailable means it could not run
+// (disabled budget, timeout, error); the scan continues on the rules alone.
+type Review struct {
+	Points      int
+	Evidence    []string
+	Unavailable bool
+}
+
+// GreyZone bounds the scores that get a second opinion: below it the rules
+// saw nothing worth paying for, above it they are already sure. Messages
+// with attachments are left to the attachment checks.
+const (
+	GreyZoneMin     = 10
+	GreyZoneMax     = 69
+	MaxReviewPoints = 30
+)
 
 // DefaultConfig is tuned against the sample corpus in testdata/ and the
 // public corpora used by eval/. Change thresholds only together with an
@@ -170,11 +200,23 @@ func (e *Engine) Analyze(msg *email.Message) *Report {
 	}
 
 	signals := merge(raw)
-	score := 0
-	for _, s := range signals {
-		score += s.Score
+	score := total(signals)
+
+	if e.cfg.Reviewer != nil && score >= GreyZoneMin && score <= GreyZoneMax && len(msg.Attachments) == 0 {
+		start := time.Now()
+		rv := e.cfg.Reviewer.Review(context.Background(), msg)
+		durations["review"] = float64(time.Since(start).Microseconds()) / 1000
+		switch pts := min(max(rv.Points, 0), MaxReviewPoints); {
+		case rv.Unavailable:
+			signals = append(signals, Signal{ID: "llm_unavailable", Check: "review", Severity: SevInfo, Score: 0,
+				Evidence: rv.Evidence})
+		case pts > 0:
+			signals = append(signals, Signal{ID: "llm_bec", Check: "review", Severity: SevMedium, Score: pts,
+				Evidence: rv.Evidence})
+			sort.SliceStable(signals, func(i, j int) bool { return signals[i].Score > signals[j].Score })
+			score = total(signals)
+		}
 	}
-	score = min(score, 100)
 
 	return &Report{
 		Verdict:     e.verdict(score),
@@ -200,6 +242,14 @@ func (e *Engine) ScanRaw(raw []byte, lim email.Limits) (*Report, error) {
 		msg.Warnings = append(msg.Warnings, err.Error())
 	}
 	return e.Analyze(msg), nil
+}
+
+func total(signals []Signal) int {
+	score := 0
+	for _, s := range signals {
+		score += s.Score
+	}
+	return min(score, 100)
 }
 
 func (e *Engine) verdict(score int) Verdict {

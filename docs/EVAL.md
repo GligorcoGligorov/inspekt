@@ -228,3 +228,49 @@ In order of expected impact, from the missed-phishing analysis:
    structurally wrong" cases.
 
 Each of these must be measured the same way before it is kept.
+
+## Grey-zone LLM on the BEC set
+
+**Scope, stated plainly:** the LLM stage is evaluated **only on our own
+synthetic samples**, never on the public corpora. The SpamAssassin texts
+are not ours to send to a third party, and `eval/evaluate.py` refuses to
+run when `INSPEKT_LLM_*` is set and any message comes from `data/`. Five
+hand-written messages say very little about a model's real precision or
+recall; they show the mechanism works and catch regressions, nothing more.
+
+The set (`testdata/bec/labels.csv`), all scoring in the grey zone (20 or 25)
+with no attachments, so all would be reviewed:
+
+| File | Label | What it is |
+|---|---|---|
+| `bec_reply_to.eml` | phish | CEO impersonation, confidential payment, Reply-To elsewhere |
+| `bec/bec_gift_cards.eml` | phish | gift cards, urgency, secrecy, Reply-To to a personal mailbox |
+| `bec/bec_vendor_bank_change.eml` | phish | supplier's "new bank account", do not call, Reply-To elsewhere |
+| `bec/legit_ceo_meeting.eml` | ham | the real CEO moving a meeting; replies go to his office |
+| `bec/legit_invoice_reminder.eml` | ham | a real invoice reminder; "details have not changed" |
+
+| Run | Command | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|---|
+| Rules only (`inspekt-rules/0.2.0`) | `make eval-bec` | 0.0 | 0.0 | 0.0 | 0 / 0 / 2 / 3 |
+| Rules + LLM | `INSPEKT_LLM_BASE_URL=… INSPEKT_LLM_MODEL=… INSPEKT_LLM_API_KEY=… make eval-bec` | not measured | not measured | not measured | — |
+
+**Why the second row is empty:** no LLM API key or local model was
+available when this stage was built, and filling the row with a fake
+classifier's output would be invented data. The stage is covered by tests
+with a fake classifier (gating, clamping, timeouts, the daily and
+per-minute caps, 429 handling, data minimisation, prompt-injection
+delimiting) and was checked end to end with the real binary against a local
+stand-in endpoint (plumbing only: request shape, masking, signal, 429
+pause). Run the command above with a real model to fill the row; the
+summary records which model was used (`llm_review`).
+
+What to look for when it is run: all 3 BEC messages above 30 points
+(`llm_bec` +30 needs likelihood ≥ 0.8), and **neither legitimate message
+flagged** (the gate is `--max-fpr 0`). The legitimate ones are written to
+be hard: a CEO email with a Reply-To elsewhere, and an invoice email about
+payment.
+
+Known limits of the stage: its grey zone starts at score 10, so BEC with no
+technical signal at all is never reviewed; names, company names and
+amounts are sent unmasked; the points mapping (≥ 0.8 → +30, ≥ 0.6 → +15) is a
+starting point to be set from data once real runs exist.

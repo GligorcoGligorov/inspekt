@@ -33,17 +33,18 @@ import (
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	cfg, err := config.Engine()
-	if err != nil {
-		log.Error("config", "err", err)
-		os.Exit(2)
-	}
 	var q *queue.Queue
+	var rdb *redis.Client
 	if addr := config.Env("INSPEKT_REDIS_ADDR", ""); addr != "" {
-		rdb := redis.NewClient(&redis.Options{Addr: addr})
+		rdb = redis.NewClient(&redis.Options{Addr: addr})
 		defer rdb.Close()
 		q = &queue.Queue{R: rdb}
 		prometheus.MustRegister(metrics.QueueCollector{Q: q})
+	}
+	cfg, err := config.Engine(rdb)
+	if err != nil {
+		log.Error("config", "err", err)
+		os.Exit(2)
 	}
 	var st store.Store
 	if dsn := config.Env("INSPEKT_MARIADB_DSN", ""); dsn != "" {
@@ -88,7 +89,7 @@ func main() {
 	}()
 
 	log.Info("listening", "addr", srv.Addr, "engine", analyze.Version,
-		"auth_mode", config.AuthMode(), "async", q != nil, "store", st != nil)
+		"auth_mode", config.AuthMode(), "async", q != nil, "store", st != nil, "llm", config.LLM())
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server", "err", err)
 		os.Exit(1)

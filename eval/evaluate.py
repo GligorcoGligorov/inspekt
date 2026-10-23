@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import subprocess
 import sys
 import time
@@ -90,6 +91,15 @@ def main() -> int:
     if not items:
         ap.error("no messages: pass --labels and/or --ham/--phish")
 
+    # The public corpora must never be sent to an external LLM (licences and
+    # privacy): with the grey-zone review configured, only our own samples
+    # may be evaluated.
+    llm = os.environ.get("INSPEKT_LLM_MODEL") or os.environ.get("INSPEKT_LLM_BASE_URL")
+    data_dir = (ROOT / "data").resolve()
+    if llm and any(p.resolve().is_relative_to(data_dir) for p, _, _ in items):
+        ap.error("refusing to send public-corpus messages to an LLM: unset INSPEKT_LLM_* "
+                 "or evaluate only testdata/ (e.g. --labels testdata/bec/labels.csv)")
+
     cli = build_cli()
     t0 = time.perf_counter()
     reports = scan(cli, [p for p, _, _ in items])
@@ -113,6 +123,7 @@ def main() -> int:
     cm = confusion(results, args.positive_at)
     summary = {
         "engine": next(iter(reports.values()))["engine"] if reports else "n/a",
+        "llm_review": os.environ.get("INSPEKT_LLM_MODEL") or "off",
         "messages": len(items),
         "parse_errors": len(errors),
         "positive_at": args.positive_at,

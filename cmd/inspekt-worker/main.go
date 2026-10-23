@@ -40,7 +40,9 @@ func main() {
 		os.Exit(2)
 	}
 
-	cfg, err := config.Engine()
+	rdb := redis.NewClient(&redis.Options{Addr: config.Env("INSPEKT_REDIS_ADDR", "localhost:6379")})
+	defer rdb.Close()
+	cfg, err := config.Engine(rdb)
 	if err != nil {
 		fatal("config", err)
 	}
@@ -49,8 +51,6 @@ func main() {
 		fatal("config", err)
 	}
 	eng := analyze.New(cfg)
-	rdb := redis.NewClient(&redis.Options{Addr: config.Env("INSPEKT_REDIS_ADDR", "localhost:6379")})
-	defer rdb.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -98,7 +98,7 @@ func main() {
 	// SIGTERM (docker stop, a deploy) stops reading; scans in progress
 	// finish and are acknowledged before the process exits.
 	log.Info("worker started", "consumer", host, "workers", workers,
-		"engine", analyze.Version, "auth_mode", config.AuthMode(), "store", st != nil)
+		"engine", analyze.Version, "auth_mode", config.AuthMode(), "store", st != nil, "llm", config.LLM())
 	if err := w.Run(ctx); err != nil {
 		log.Error("worker", "err", err)
 		os.Exit(1)

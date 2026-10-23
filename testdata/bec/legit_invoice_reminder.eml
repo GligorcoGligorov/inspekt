@@ -1,0 +1,18 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=mail.billing-platform.example; dkim=pass header.d=acme-tools.example; dmarc=pass
+Return-Path: <bounce-9921@mail.billing-platform.example>
+From: Acme Tools Billing <billing@acme-tools.example>
+Reply-To: Acme Tools Billing <acme-tools@billing-platform.example>
+To: ap@example.org
+Subject: Reminder: invoice INV-2209 due on 31 October
+Date: Tue, 20 Oct 2026 09:30:00 +0000
+Message-ID: <inv-2209-r1@billing-platform.example>
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+This is a friendly reminder that invoice INV-2209 (1,240.00 EUR, order 10-2231) is due on 31 October 2026.
+
+Please pay to the account details printed on the invoice; they have not changed. If you have already paid, please ignore this message. Questions about the invoice? Reply to this email or call our office on the number on the invoice.
+
+Kind regards,
+Acme Tools Billing

@@ -57,7 +57,7 @@ func TestDashboardUsesDefinedMetrics(t *testing.T) {
 	defined := map[string]bool{}
 	ch := make(chan *prometheus.Desc, 64)
 	for _, c := range []prometheus.Collector{Scans, Verdicts, ScanDuration, CheckDuration, Signals,
-		QueueWait, Outcomes, ScanFailures, Enqueued, QueueCollector{}} {
+		QueueWait, Outcomes, ScanFailures, Enqueued, LLMCalls, LLMDuration, QueueCollector{}} {
 		c.Describe(ch)
 	}
 	close(ch)

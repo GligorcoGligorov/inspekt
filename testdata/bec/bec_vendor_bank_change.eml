@@ -1,0 +1,23 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=northwind-supply.example; dkim=pass header.d=northwind-supply.example; dmarc=pass
+Return-Path: <billing@northwind-supply.example>
+From: Northwind Supply Accounts <billing@northwind-supply.example>
+Reply-To: Northwind Accounts <accounts.northwind@secure-invoices.example>
+To: ap@example.org
+Subject: Updated remittance details for open invoices
+Date: Thu, 22 Oct 2026 13:40:00 +0000
+Message-ID: <rm-77@northwind-supply.example>
+Content-Type: text/plain; charset=utf-8
+
+Dear Accounts Payable,
+
+Due to an ongoing audit our usual bank account is temporarily frozen. Please make sure the two open invoices (INV-4471 and INV-4480, total 38,920.00 EUR) are paid to our new account below, today if possible, to avoid late fees and a hold on your next delivery:
+
+Bank: First Continental Bank
+IBAN: GB33 BUKB 2020 1555 5555 55
+SWIFT: BUKBGB22
+
+Please do not use the old details on file and do not call our office, as the lines are being changed. Reply to this email once the transfer is done.
+
+Best regards,
+Laura Mitchell
+Accounts Receivable, Northwind Supply

@@ -423,6 +423,40 @@
       },
       "options": {},
       "id": 9
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Grey-zone LLM reviews per minute",
+      "description": "Only when INSPEKT_LLM_* is set. capped = budget reached or paused after a 429; rate_limited = the provider answered 429.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (result) (increase(inspekt_llm_calls_total[1m]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {}
     }
   ],
   "templating": {

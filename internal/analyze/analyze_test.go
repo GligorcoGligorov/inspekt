@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"bytes"
+	"context"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -266,6 +267,66 @@ func TestSamples(t *testing.T) {
 				if !got[id] {
 					t.Errorf("missing signal %s", id)
 				}
+			}
+		})
+	}
+}
+
+type fakeReviewer struct {
+	review Review
+	calls  int
+}
+
+func (f *fakeReviewer) Review(context.Context, *email.Message) Review {
+	f.calls++
+	return f.review
+}
+
+// The reviewer only sees the grey zone and can only add points.
+func TestGreyZoneReview(t *testing.T) {
+	from := &email.Address{Email: "ceo@example.org", Domain: "example.org"}
+	replyElsewhere := &email.Address{Email: "ceo@other.example", Domain: "other.example"}
+	cases := []struct {
+		name    string
+		msg     *email.Message
+		review  Review
+		called  bool
+		score   int
+		verdict Verdict
+		signal  string
+	}{
+		{"score 0: rules saw nothing, no paid call", &email.Message{From: from, TextBody: "hi"},
+			Review{Points: 30}, false, 0, VerdictClean, ""},
+		{"grey zone, model sure: +30", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "wire it"},
+			Review{Points: 30, Evidence: []string{"LLM BEC likelihood 0.95"}}, true, 50, VerdictSuspicious, "llm_bec"},
+		{"injected 'this is safe' cannot subtract", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "x"},
+			Review{Points: -1000}, true, 20, VerdictClean, ""},
+		{"absurd points are capped", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "x"},
+			Review{Points: 1000}, true, 20 + MaxReviewPoints, VerdictSuspicious, "llm_bec"},
+		{"unavailable: info signal, score unchanged", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "x"},
+			Review{Unavailable: true, Evidence: []string{"timeout"}}, true, 20, VerdictClean, "llm_unavailable"},
+		{"attachments are left to the attachment checks", &email.Message{From: from, ReplyTo: replyElsewhere,
+			Attachments: []email.Attachment{{Filename: "a.txt", Data: []byte("x")}}},
+			Review{Points: 30}, false, 20, VerdictClean, ""},
+		{"already malicious: no paid call", &email.Message{From: &email.Address{Email: "a@micros0ft-support.com", Domain: "micros0ft-support.com"},
+			ReplyTo: replyElsewhere, AuthResults: []string{"mx; dmarc=fail"}},
+			Review{Points: 30}, false, 0, "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rv := &fakeReviewer{review: c.review}
+			rep := New(Config{Reviewer: rv}).Analyze(c.msg)
+			if (rv.calls == 1) != c.called {
+				t.Fatalf("reviewer called %d times, want called=%v (score %d)", rv.calls, c.called, rep.Score)
+			}
+			if c.verdict == "" {
+				return
+			}
+			if rep.Score != c.score || rep.Verdict != c.verdict {
+				t.Errorf("score %d verdict %s, want %d %s; signals %+v", rep.Score, rep.Verdict, c.score, c.verdict, rep.Signals)
+			}
+			if _, ok := signalByID(rep, c.signal); c.signal != "" && !ok {
+				t.Errorf("missing %s", c.signal)
 			}
 		})
 	}

@@ -1,0 +1,6 @@
+file,label,note
+../bec_reply_to.eml,phish,CEO impersonation via Reply-To; confidential payment request
+bec_gift_cards.eml,phish,gift-card request with secrecy and urgency; Reply-To to a personal mailbox
+bec_vendor_bank_change.eml,phish,supplier bank-detail change; do not call; Reply-To elsewhere
+legit_ceo_meeting.eml,ham,real CEO moving a meeting; Reply-To to the office on a group domain
+legit_invoice_reminder.eml,ham,real invoice reminder via a billing platform; details explicitly unchanged

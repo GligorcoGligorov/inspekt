@@ -1,0 +1,17 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=example.org; dkim=pass header.d=example.org; dmarc=pass
+From: Marko Petrovski <m.petrovski@example.org>
+Reply-To: Office of the CEO <office@example-group.example>
+To: leadership@example.org
+Subject: Board prep moved to Thursday
+Date: Wed, 21 Oct 2026 16:05:00 +0000
+Message-ID: <bp-3@example.org>
+Content-Type: text/plain; charset=utf-8
+
+Hi all,
+
+The board prep meeting moves from Wednesday to Thursday 10:00 in the large meeting room, as the auditors need Wednesday morning. Same agenda: Q3 numbers, the hiring plan and the office move.
+
+Ana, could you send the updated Q3 deck to the group by Wednesday evening? Replies go to my office, they keep my calendar.
+
+Thanks,
+Marko
