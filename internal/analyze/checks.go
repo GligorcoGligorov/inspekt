@@ -9,6 +9,7 @@ import (
 
 	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/extract"
 )
 
 // ---------------------------------------------------------------------------
@@ -180,7 +181,17 @@ var looksLikeURL = regexp.MustCompile(`(?i)^(https?://)?(www\.)?[a-z0-9\-]+(\.[a
 
 func (LinkCheck) Run(in *Input) []Signal {
 	var out []Signal
+	from := ""
+	if in.Msg.From != nil {
+		from = RegistrableDomain(in.Msg.From.Domain)
+	}
 	for _, l := range in.Links {
+		// A QR code pointing off the sender's own domain: the reader is asked
+		// to open it on a phone, outside any protected browser.
+		if l.Source == extract.SourceQR && RegistrableDomain(l.Host) != from {
+			out = append(out, Signal{ID: "qr_code_link", Severity: SevMedium, Score: 20,
+				Evidence: []string{"QR code in an image opens " + l.URL}})
+		}
 		if l.IsIP {
 			out = append(out, Signal{ID: "ip_literal_url", Severity: SevMedium, Score: 25,
 				Evidence: []string{l.URL}})

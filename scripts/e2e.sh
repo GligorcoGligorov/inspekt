@@ -55,6 +55,12 @@ phish=$(post testdata/phish_lookalike.eml)
 expect "$phish" done malicious
 expect "$(post testdata/clean_newsletter.eml)" done clean
 
+step "a link hidden in a QR code image is decoded and checked"
+body=$(result "$(post testdata/qr_phish.eml)")
+jq -e '.report.verdict == "suspicious" and ([.report.signals[].id] | index("qr_code_link") and index("lookalike_link"))' <<<"$body" >/dev/null ||
+	fail "qr_phish: $(jq -c '{verdict: .report.verdict, signals: [.report.signals[].id]}' <<<"$body")"
+echo "ok $(jq -c '{verdict: .report.verdict, signals: [.report.signals[].id]}' <<<"$body")"
+
 step "resubmitting the same message returns the same scan"
 [ "$(post testdata/phish_lookalike.eml)" = "$phish" ] || fail "idempotency: new id for the same message"
 echo ok

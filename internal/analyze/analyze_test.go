@@ -1,10 +1,15 @@
 package analyze
 
 import (
+	"bytes"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/qrcode"
 
 	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/auth/authtest"
@@ -164,6 +169,46 @@ func TestURLShortenerCountsOnce(t *testing.T) {
 	}
 }
 
+// QR links must reach every existing link check, not just qr_code_link.
+func TestQRLinksGoThroughLinkChecks(t *testing.T) {
+	cases := []struct {
+		content string
+		want    []string
+		not     []string
+	}{
+		{"https://login-micros0ft.com/verify", []string{"qr_code_link", "lookalike_link"}, nil},
+		{"http://203.0.113.5/owa", []string{"qr_code_link", "ip_literal_url"}, nil},
+		{"https://bit.ly/3xYzAb", []string{"qr_code_link", "url_shortener"}, nil},
+		// The sender's own site: a QR code alone is not suspicious.
+		{"https://www.example.org/menu", nil, []string{"qr_code_link"}},
+	}
+	eng := New(DefaultConfig)
+	for _, c := range cases {
+		m, err := qrcode.NewQRCodeWriter().Encode(c.content, gozxing.BarcodeFormat_QR_CODE, 200, 200, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var img bytes.Buffer
+		png.Encode(&img, m)
+		msg := &email.Message{
+			From:        &email.Address{Email: "it@example.org", Domain: "example.org"},
+			TextBody:    "Scan the attached code.",
+			Attachments: []email.Attachment{{Filename: "code.png", ContentType: "image/png", Data: img.Bytes()}},
+		}
+		rep := eng.Analyze(msg)
+		for _, id := range c.want {
+			if _, ok := signalByID(rep, id); !ok {
+				t.Errorf("%s: missing %s, got %+v", c.content, id, rep.Signals)
+			}
+		}
+		for _, id := range c.not {
+			if _, ok := signalByID(rep, id); ok {
+				t.Errorf("%s: unexpected %s", c.content, id)
+			}
+		}
+	}
+}
+
 func TestMergeKeepsHighestScoreOnce(t *testing.T) {
 	out := merge([]Signal{
 		{ID: "x", Score: 10, Evidence: []string{"a"}},
@@ -190,8 +235,8 @@ func TestSamples(t *testing.T) {
 		// has almost no technical signals. Rules alone cannot catch it;
 		// this is what the LLM stage (WEEKEND_PLAN step 6) is for.
 		{"bec_reply_to.eml", VerdictClean, []string{"reply_to_mismatch"}},
-		// Known gap until step 4: the phishing URL exists only in a QR image.
-		{"qr_phish.eml", VerdictClean, nil},
+		// The phishing URL exists only in a QR image (step 4).
+		{"qr_phish.eml", VerdictSuspicious, []string{"qr_code_link", "lookalike_link"}},
 		{"support_ticket_reply_to.eml", VerdictClean, []string{"reply_to_mismatch"}},
 		{"ip_link_mailbox.eml", VerdictSuspicious, []string{"ip_literal_url"}},
 	}

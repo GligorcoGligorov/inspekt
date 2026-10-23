@@ -10,6 +10,7 @@ package analyze
 
 import (
 	"bytes"
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 	"github.com/GligorcoGligorov/inspekt/internal/extract"
+	"github.com/GligorcoGligorov/inspekt/internal/qr"
 )
 
 // Severity is a coarse label for UI and alerting; Score drives the verdict.
@@ -72,6 +74,8 @@ type Config struct {
 	// Verifier, when set, replaces upstream Authentication-Results with our
 	// own SPF / DKIM / DMARC verification (INSPEKT_AUTH_MODE=verify).
 	Verifier *auth.Verifier
+	// QR bounds decoding of QR codes in image attachments.
+	QR qr.Limits
 }
 
 // DefaultConfig is tuned against the sample corpus in testdata/ and the
@@ -107,6 +111,7 @@ const Version = "inspekt-rules/0.1.0"
 type Engine struct {
 	cfg    Config
 	checks []Check
+	qr     *qr.Scanner
 }
 
 // New builds an engine with the standard checks.
@@ -125,7 +130,10 @@ func New(cfg Config) *Engine {
 		v.OrgDomain = RegistrableDomain
 		cfg.Verifier = &v
 	}
-	return &Engine{cfg: cfg, checks: []Check{
+	if cfg.QR == (qr.Limits{}) {
+		cfg.QR = qr.DefaultLimits
+	}
+	return &Engine{cfg: cfg, qr: &qr.Scanner{Limits: cfg.QR}, checks: []Check{
 		AuthCheck{Trusted: cfg.TrustedAuthServIDs, Verifier: cfg.Verifier},
 		SenderCheck{},
 		LookalikeCheck{Protected: cfg.ProtectedDomains},
@@ -140,7 +148,18 @@ func (e *Engine) Analyze(msg *email.Message) *Report {
 	in := &Input{Msg: msg, Links: extract.Links(msg)}
 	durations := map[string]float64{}
 
+	// QR links join the same list as every other link, so all link checks
+	// (lookalike, IP literal, shortener, ...) apply to them unchanged.
 	var raw []Signal
+	start := time.Now()
+	qrRes := e.qr.Scan(context.Background(), msg)
+	durations["qr"] = float64(time.Since(start).Microseconds()) / 1000
+	in.Links = append(in.Links, qrRes.Links...)
+	if len(qrRes.Skipped) > 0 {
+		raw = append(raw, Signal{ID: "qr_not_scanned", Check: "qr", Severity: SevInfo, Score: 0,
+			Evidence: qrRes.Skipped})
+	}
+
 	for _, c := range e.checks {
 		start := time.Now()
 		for _, s := range c.Run(in) {

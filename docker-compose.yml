@@ -49,6 +49,9 @@ services:
     environment:
       INSPEKT_REDIS_ADDR: "redis:6379"
       INSPEKT_WORKERS: "4"
+      # Go's GC does not see the container limit; without this the heap
+      # grows to 256m under large QR images and risks an OOM kill.
+      GOMEMLIMIT: 200MiB
       INSPEKT_TRUSTED_AUTHSERV_IDS: ""
       INSPEKT_AUTH_MODE: headers
     # docker stop sends SIGTERM; give in-flight scans time to finish.

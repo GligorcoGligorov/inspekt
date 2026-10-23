@@ -229,3 +229,85 @@ Lesson: a config setting is a claim until a test proves it.
    would silently delete queued emails. Then I would tell the story of the
    Lua-script bug above: the setting looked right, but only a test that
    fills Redis on purpose showed it was not enforced.
+
+---
+
+## Step 4: QR codes in image attachments
+
+### The problem
+
+"Quishing": the phishing link is not text in the email but a **QR code in
+a picture**. Our link checks never saw it, because there was no link to see.
+And the victim scans it with a phone, outside the company's protected
+laptop browser. `qr_phish.eml` was the sample we could not catch.
+
+### What we do now
+
+- For every attachment, we first ask "is this an image?" by **reading its
+  bytes** (`image.DecodeConfig`), not by trusting the Content-Type or file
+  name, which the attacker writes.
+- We decode the image and look for a QR code (`gozxing`, a Go port of the
+  ZXing library). If it contains a web address, it becomes a normal link
+  with `source: qr_code`. Payloads like `evil.example/pay` (no `https://`)
+  count too, because phones open them as web addresses.
+- Because it joins the same link list, **every existing check runs on it
+  automatically**: lookalike domain, IP address, URL shortener. We did not
+  write new checks for QR links, we just fed them in.
+- New signal `qr_code_link` (+20): a QR code pointing outside the sender's
+  own domain. A restaurant emailing a QR code to its own menu does not get it.
+
+Result: `qr_phish.eml` is now suspicious (score 50: `qr_code_link` +
+`lookalike_link`), recall on the samples went from 0.60 to 0.80, and the
+CI gate was raised to 0.80 so it cannot quietly drop back.
+
+### The limits (images are hostile input)
+
+| Limit | Default | Why |
+|---|---|---|
+| images per message | 10 | 1,000 tiny images would cost 1,000 decodes |
+| bytes per image | 5 MiB | bounds reading and decompression work |
+| width / height | 4000 px | stops **decompression bombs** (below) |
+| time per image | 2 s | a pathological image cannot stall a worker |
+| decodes at once | 2 per process | bounds memory, even for timed-out decodes |
+
+A **decompression bomb** is a tiny file that claims to be huge. Our test
+builds a 67-byte PNG whose header says 50000×50000 pixels. Decoding it would
+mean allocating ~10 GB. We read **only the header** first and reject it
+before any pixel is decoded. The test also checks this takes under 100 ms.
+
+The timeout has a catch worth knowing: **Go cannot kill a goroutine**. When
+a decode times out, we stop waiting, but the decode keeps running until it
+ends. That is why a decode keeps its "slot" until it really finishes: at
+most 2 decodes exist at any time, finished or abandoned, so memory stays
+bounded.
+
+We measured it: 4 large (3990×3990 colour) QR images at once pushed the
+worker to **255.9 of 256 MiB**. Go's garbage collector does not know about
+the container's limit. Setting `GOMEMLIMIT=200MiB` tells it, and the same
+test peaked at ~207 MiB with no OOM kill.
+
+### Interview questions
+
+1. **"Why read the image header before decoding?"**
+   Because the decoder allocates memory for the size the header *claims*.
+   A 67-byte file can claim 50000×50000 pixels: decoding first and checking
+   later means the damage (gigabytes of allocation, or an OOM kill of the
+   worker) is already done. Checking the header costs microseconds. Same
+   idea as zip bombs: check the declared size before expanding.
+
+2. **"Your per-image timeout fires. Is the work actually stopped?"**
+   No. In Go you cannot kill a goroutine from outside; the decode keeps
+   running until it finishes. So the timeout protects the *caller's*
+   latency, not the CPU. To bound the real cost I cap pixel dimensions and
+   cap concurrent decodes per process, and a timed-out decode keeps its slot
+   until it ends. For a hard stop you would decode in a separate process you
+   can kill (more isolation, more overhead).
+
+3. **"How would an attacker evade your QR check?"**
+   Put the QR code where we do not look (inside a PDF, in an HTML `data:`
+   image, split across two images, or drawn with HTML table cells), make
+   it hard to decode (distortion, low contrast), or exceed our limits on
+   purpose (11 images, huge dimensions). Exceeding a limit produces a
+   0-point `qr_not_scanned` signal, so the analyst sees it. Once evaluation
+   data exists, that signal could carry a few points, because legitimate
+   mail rarely trips these limits.

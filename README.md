@@ -87,6 +87,8 @@ flowchart LR
   A[POST /v1/scans<br/>raw .eml] --> P[email.Parse<br/>size / part / depth limits]
   P --> X[extract.Links<br/>text, HTML anchors, forms]
   X --> E[analyze.Engine]
+  P --> Q[qr.Scan<br/>QR codes in images,<br/>bounded]
+  Q -- "links (source qr_code)" --> E
   E --> C1[auth] & C2[sender] & C3[lookalike] & C4[links] & C5[attachments] & C6[lure]
   C1 & C2 & C3 & C4 & C5 & C6 --> M[merge signals<br/>score → verdict]
   M --> R[JSON report + metrics]
@@ -97,6 +99,7 @@ flowchart LR
 | `internal/email` | Hostile-input MIME parser (stdlib only), limits, attachment hashing |
 | `internal/extract` | Links with visible anchor text, form actions |
 | `internal/analyze` | Independent checks, signal merging, scoring, verdict |
+| `internal/qr` | QR codes in image attachments → links, with image count / size / pixel / time limits |
 | `internal/auth` | Native SPF / DKIM / DMARC verification behind an injectable DNS `Resolver` |
 | `internal/api` | HTTP API (async with a queue, inline without), Prometheus-format metrics |
 | `internal/queue` | Redis Streams producer, worker pool, watchdog, dead-letter queue |
@@ -123,16 +126,18 @@ flowchart LR
 
 | Corpus | Messages | Precision | Recall | FPR |
 |---|---|---|---|---|
-| Sample (`testdata/`) | 7 | 1.00 | 0.60 | 0.00 |
+| Sample (`testdata/`) | 7 | 1.00 | 0.80 | 0.00 |
 
-Both misses are deliberate, documented gaps (see `testdata/labels.csv` and the
-roadmap), and rules are not tuned to hide them:
+The one miss is a deliberate, documented gap (see `testdata/labels.csv` and the
+roadmap), and rules are not tuned to hide it: `bec_reply_to.eml` is a
+text-only business-email compromise from a correctly authenticated domain,
+whose only technical signal is a Reply-To mismatch.
 
-- `bec_reply_to.eml`: text-only business-email compromise from a correctly
-  authenticated domain; its only technical signal is a Reply-To mismatch.
-- `qr_phish.eml`: the phishing URL exists only inside a QR code image.
+`qr_phish.eml`, whose phishing URL exists only inside a QR code image, was
+the second gap until QR decoding (step 4): recall went from 0.60 to 0.80, and
+the gate was raised with it.
 
-The sample gate (`--min-recall 0.6 --max-fpr 0 --max-parse-errors 0`) therefore
+The sample gate (`--min-recall 0.8 --max-fpr 0 --max-parse-errors 0`) therefore
 has no slack: losing any currently caught phish, flagging either legitimate
 message, or failing to parse a sample fails CI.
 
@@ -162,6 +167,12 @@ message, or failing to parse a sample fails CI.
   and forwarding legitimately breaks DMARC, so this may over-weight it. The
   weight stays until the public-corpus evaluation (step 7) can measure it.
 - HTML and archive attachments are flagged by type, not opened.
+- QR codes are read from PNG, JPEG and GIF attachments only: not from images
+  embedded as `data:` URIs in HTML, inside PDFs or Office files, and only
+  one QR code per image. Images beyond the limits (10 per message, 5 MiB,
+  4000×4000 px, 2 s each) are skipped with a 0-point `qr_not_scanned` signal.
+  A decode that times out keeps running in the background until it ends;
+  the pixel limit bounds that cost.
 
 ## Roadmap
 
