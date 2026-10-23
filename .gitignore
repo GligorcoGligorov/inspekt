@@ -1,0 +1,8 @@
+bin/
+data/
+eval/out/
+eval/report.*
+__pycache__/
+internal/email/testdata/fuzz/
+.DS_Store
+.env

@@ -1,0 +1,36 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -coverprofile=cover.out ./...
+      - name: short fuzz of the MIME parser
+        run: go test ./internal/email -run='^$' -fuzz=FuzzParse -fuzztime=30s
+
+  detection-quality:
+    # Fails the build if a rule change makes detection worse.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m unittest discover -s eval
+      - run: python eval/evaluate.py --labels testdata/labels.csv --min-recall 0.6 --max-fpr 0 --out eval/out/sample
+      - uses: actions/upload-artifact@v4
+        with: { name: eval-report, path: eval/out/ }
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t inspekt-api .

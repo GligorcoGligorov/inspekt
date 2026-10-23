@@ -1,0 +1,13 @@
+# Step 0: API only.  Step 3 adds redis + worker, step 5 mariadb,
+# step 7 prometheus + grafana (see docs/WEEKEND_PLAN.md).
+services:
+  api:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      INSPEKT_ADDR: ":8080"
+      INSPEKT_TRUSTED_AUTHSERV_IDS: ""   # e.g. mx.yourcompany.com in production
+    read_only: true
+    deploy:
+      resources:
+        limits: { memory: 256m }   # keep the 8 GB MacBook happy

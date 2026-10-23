@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Evaluate Inspekt against a labelled corpus and gate on regressions.
+
+Examples
+--------
+Sample corpus shipped with the repo:
+
+    python3 eval/evaluate.py --labels testdata/labels.csv
+
+Public corpora (see docs/WEEKEND_PLAN.md, step 4):
+
+    python3 eval/evaluate.py --ham data/ham --phish data/phish \
+        --min-recall 0.80 --max-fpr 0.02 --out eval/report
+
+The scanner is invoked through the CLI in JSONL mode, in batches, so the
+evaluation runs offline and needs nothing but a Go toolchain.
+Exit code 1 means a quality gate failed, which is what CI keys on.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from metrics import confusion, signal_counts  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+BATCH = 200
+
+
+def load_labels(args) -> list[tuple[Path, str]]:
+    items: list[tuple[Path, str]] = []
+    if args.labels:
+        base = Path(args.labels).parent
+        with open(args.labels, newline="") as f:
+            for row in csv.DictReader(f):
+                items.append((base / row["file"], row["label"]))
+    for d, label in ((args.ham, "ham"), (args.phish, "phish")):
+        if d:
+            items += [(p, label) for p in sorted(Path(d).rglob("*")) if p.is_file()]
+    if args.limit:
+        items = items[: args.limit]
+    return items
+
+
+def build_cli() -> Path:
+    out = ROOT / "bin" / "inspekt"
+    subprocess.run(["go", "build", "-o", str(out), "./cmd/inspekt"], cwd=ROOT, check=True)
+    return out
+
+
+def scan(cli: Path, files: list[Path]) -> dict[str, dict]:
+    """Run the CLI over files in batches; return reports keyed by path."""
+    reports: dict[str, dict] = {}
+    for i in range(0, len(files), BATCH):
+        chunk = [str(p) for p in files[i : i + BATCH]]
+        proc = subprocess.run([str(cli), "scan", "--json", *chunk], capture_output=True, text=True)
+        for line in proc.stdout.splitlines():
+            rep = json.loads(line)
+            reports[rep["file"]] = rep
+        # Files the parser rejected are reported on stderr; they become
+        # "error" rows rather than silently disappearing from the metrics.
+    return reports
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--labels", help="CSV with columns file,label (label: ham|phish)")
+    ap.add_argument("--ham", help="directory of legitimate messages")
+    ap.add_argument("--phish", help="directory of phishing / malicious messages")
+    ap.add_argument("--positive-at", default="suspicious", choices=["suspicious", "malicious"])
+    ap.add_argument("--min-recall", type=float, default=0.0)
+    ap.add_argument("--max-fpr", type=float, default=1.0)
+    ap.add_argument("--limit", type=int, default=0, help="evaluate only the first N messages")
+    ap.add_argument("--out", help="write <out>.json and <out>.md")
+    args = ap.parse_args()
+
+    items = load_labels(args)
+    if not items:
+        ap.error("no messages: pass --labels and/or --ham/--phish")
+
+    cli = build_cli()
+    t0 = time.perf_counter()
+    reports = scan(cli, [p for p, _ in items])
+    elapsed = time.perf_counter() - t0
+
+    results, errors = [], []
+    for path, label in items:
+        rep = reports.get(str(path))
+        if rep is None:
+            errors.append(str(path))
+            continue
+        results.append({
+            "file": str(path),
+            "label": label,
+            "verdict": rep["verdict"],
+            "score": rep["score"],
+            "signals": [s["id"] for s in rep["signals"]],
+        })
+
+    cm = confusion(results, args.positive_at)
+    summary = {
+        "engine": next(iter(reports.values()))["engine"] if reports else "n/a",
+        "messages": len(items),
+        "parse_errors": len(errors),
+        "positive_at": args.positive_at,
+        "throughput_msgs_per_s": round(len(results) / elapsed, 1) if elapsed else None,
+        **cm.summary(),
+        "signals_on_ham": signal_counts(results, "ham").most_common(10),
+        "signals_on_phish": signal_counts(results, "phish").most_common(10),
+        "missed": [r["file"] for r in results if r["label"] == "phish" and r["verdict"] == "clean"][:20],
+        "false_positives": [r["file"] for r in results if r["label"] == "ham" and r["verdict"] != "clean"][:20],
+    }
+
+    print(json.dumps(summary, indent=2))
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out + ".json").write_text(json.dumps({"summary": summary, "results": results}, indent=2))
+        Path(args.out + ".md").write_text(to_markdown(summary))
+
+    failed = []
+    if cm.recall < args.min_recall:
+        failed.append(f"recall {cm.recall:.3f} < {args.min_recall}")
+    if cm.fpr > args.max_fpr:
+        failed.append(f"false-positive rate {cm.fpr:.3f} > {args.max_fpr}")
+    if failed:
+        print("QUALITY GATE FAILED: " + "; ".join(failed), file=sys.stderr)
+        return 1
+    return 0
+
+
+def to_markdown(s: dict) -> str:
+    rows = "\n".join(f"| {k} | {s[k]} |" for k in
+                     ("messages", "precision", "recall", "f1", "false_positive_rate", "throughput_msgs_per_s"))
+    ham = "\n".join(f"- `{sig}`: {n}" for sig, n in s["signals_on_ham"]) or "- none"
+    return f"""# Inspekt evaluation ({s['engine']})
+
+| metric | value |
+|---|---|
+{rows}
+
+Confusion: TP {s['tp']} · FP {s['fp']} · TN {s['tn']} · FN {s['fn']} (positive = verdict ≥ {s['positive_at']})
+
+## Signals firing on legitimate mail (false-positive drivers)
+{ham}
+"""
+
+
+if __name__ == "__main__":
+    sys.exit(main())

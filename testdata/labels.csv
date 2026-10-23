@@ -1,0 +1,5 @@
+file,label
+clean_newsletter.eml,ham
+phish_lookalike.eml,phish
+malware_attachment.eml,phish
+bec_reply_to.eml,phish

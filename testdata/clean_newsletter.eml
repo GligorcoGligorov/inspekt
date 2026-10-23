@@ -1,0 +1,24 @@
+Return-Path: <bounces@mail.example-shop.com>
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=mail.example-shop.com; dkim=pass header.d=example-shop.com; dmarc=pass header.from=example-shop.com
+From: Example Shop <news@example-shop.com>
+To: reader@example.org
+Subject: Your October picks
+Date: Tue, 20 Oct 2026 09:00:00 +0000
+Message-ID: <nl-1@example-shop.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+New arrivals are in: https://www.example-shop.com/new
+Unsubscribe: https://www.example-shop.com/unsubscribe
+
+--b1
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>New arrivals are in.</p>
+<a href="https://www.example-shop.com/new">See what's new</a>
+<a href="https://www.example-shop.com/unsubscribe">Unsubscribe</a>
+</body></html>
+--b1--

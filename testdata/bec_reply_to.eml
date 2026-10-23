@@ -1,0 +1,9 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=example.org; dkim=pass header.d=example.org; dmarc=pass
+From: CEO <ceo@example.org>
+Reply-To: ceo.private@outlook-mail.example
+To: finance@example.org
+Subject: Quick favour
+Date: Wed, 21 Oct 2026 11:30:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+Are you at your desk? I need you to handle a confidential payment today. Reply to this email only.
