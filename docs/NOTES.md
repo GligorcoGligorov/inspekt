@@ -494,3 +494,81 @@ false positive fails CI until someone updates the gate and EVAL.md on purpose.
    plausible. Two lessons: count what you *didn't* measure (we report
    parse errors and gate on them), and evaluate on real, messy data early,
    because hand-made samples never contain invalid UTF-8 in HTML.
+
+---
+
+## Step 9: Benchmarks, profiling, load test
+
+### Three kinds of measurement, three different questions
+
+- **Micro-benchmarks** (`go test -bench`, `make bench`): how fast is one
+  function on one input? Parsing an email takes about 3–9 microseconds; analysing
+  it 6–15 µs; decoding a QR code ~0.33 ms. Good for comparing before/after a
+  code change, useless for "how many emails per second can the system do".
+- **Profiling** (`pprof`): *where* does the time or memory go?
+- **Load test** (`cmd/inspekt-load`, `make load`): the whole system (API,
+  Redis, worker, MariaDB) under many concurrent clients. How many scans per
+  second, and how long does a client wait (p50/p95/p99)?
+
+### What profiling found
+
+The CPU profile was useless for this benchmark (mostly the Go runtime
+idling), but the **allocation** profile was clear: about 91 % of all memory
+allocations came from the lookalike check. For every link it recomputed
+the same things about our 15 protected brands. A 300-link newsletter meant
+4,500 repeats. Computing them once (and each host once per email) made
+link-heavy mail **4× faster** and cut allocations by 90 %.
+
+How we know it did not change behaviour: we re-ran the 6,202-email
+evaluation and compared every message. All 6,199 scanned messages had the
+same verdict, score and signals. A performance change should be provably
+boring.
+
+### What the load test found
+
+1. **A bug.** The first runs showed ~80 scans/s and a few scans taking over
+   a minute. The worker logs said: InnoDB **deadlock**. Two workers saving
+   different scans at the same time locked each other, because
+   `DELETE FROM signals WHERE scan_id = ?` for a scan that has no signals
+   yet still takes "gap locks" in InnoDB. Our design meant nothing was lost
+   (the watchdog retried after 60 s), but users would wait a minute. Fix:
+   skip the DELETE for new scans (the upsert tells us whether the row is
+   new), and retry the transaction on a deadlock, which InnoDB documents as
+   normal. A new test runs 200 saves at once and failed before the fix.
+2. **The real numbers:** ~870–980 scans/s, p95 under 80 ms at 32 clients.
+3. **The limit is not where you'd guess.** At 64 clients the throughput
+   dropped, and the busiest containers were the API and MariaDB, not the
+   worker. The load generator polls for results every 10 ms, and each poll is
+   a database read. Polling every 50 ms instead gave ~980 scans/s again. So
+   the bottleneck was the *measurement's own read traffic*. A real system
+   would push results (webhook) instead of being polled.
+
+Rule we followed: never round a number up, write down the machine
+(MacBook Air M3, 8 GB), and keep the raw numbers in `docs/BENCHMARKS.md`.
+
+### Interview questions
+
+1. **"What's the difference between your benchmark and your load test
+   numbers?"**
+   The benchmark says one core analyses a typical email in ~10 µs, so in
+   theory 100,000 per second. The load test says the whole system does
+   ~900 per second. The gap is everything around the analysis: HTTP, a
+   Redis write and stream read, a MariaDB transaction per scan, the
+   result lookups, and Docker networking on a laptop. If I want more
+   throughput, the profile says not to optimise the analysis but the I/O:
+   batch the database writes, push results instead of being polled.
+
+2. **"You found a deadlock. Why didn't you just retry and move on?"**
+   Retrying alone would hide the cause and still waste work under load. The
+   cause was a DELETE of rows that didn't exist taking gap locks, done for
+   every new scan. Removing it fixes the common case; retry stays as the
+   safety net because InnoDB can still pick a deadlock victim in rare
+   cases. I wrote a test that reproduces it (200 concurrent saves) first, saw
+   it fail with the same error as production, then fixed it.
+
+3. **"How do you know your optimisation didn't break detection?"**
+   Same input, same output: I ran the full evaluation before and after and
+   compared every one of the 6,199 messages: verdicts, scores and signals
+   were identical. Benchmarks show it's faster; the evaluation shows it's
+   still correct. A speed-up that changes results is a behaviour change and
+   needs its own justification.

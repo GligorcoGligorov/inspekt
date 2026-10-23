@@ -1,13 +1,16 @@
 # Inspekt
 
 An email threat-analysis service in Go. Inspekt parses raw messages, extracts
-artifacts (links, forms, attachments), checks sender authentication and
-identity, and returns an **explainable verdict**: every point of the score is
-backed by a signal with evidence an analyst can read.
+artifacts (links, forms, attachments, QR codes in images), checks sender
+authentication and identity, and returns an **explainable verdict**: every
+point of the score is backed by a signal with evidence an analyst can read.
 
-Detection quality is measured, not assumed: a Python evaluation harness reports
-precision, recall and false-positive rate on labelled corpora, and CI fails if
-a change makes detection worse.
+Detection quality is measured, not assumed. On 6,202 public emails it is
+**precise but catches about one phishing message in five** (precision 0.91,
+recall 0.19, false-positive rate 0.9 %); [why, and what would fix
+it](#detection-quality). The async pipeline sustained **868.1–980.9 scans/s**
+in load tests on a MacBook Air M3, with p95 end-to-end latency under 80 ms at
+32 clients.
 
 ```
 $ inspekt scan testdata/phish_lookalike.eml
@@ -30,17 +33,19 @@ testdata/phish_lookalike.eml
 ```bash
 make test          # Go + Python tests
 make scan          # scan the sample messages
-make eval-sample   # precision / recall on the sample corpus
 make run           # HTTP API on :8080, scans analysed inline (no Redis needed)
 curl --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
+
+make e2e           # full stack in Docker (API, Redis, worker, MariaDB) + end-to-end checks
 make test-db       # store tests against a throwaway MariaDB container
-make e2e           # full stack in Docker + end-to-end checks
+make eval-sample   # precision / recall on the 7 hand-made samples
+make eval          # download the public corpora (pinned) and evaluate on 6,202 emails
 ```
 
-With the full stack (`docker compose up --build`: API, Redis, worker,
-MariaDB), a scan is queued and fetched by id. The MariaDB password defaults
-to a **dev-only** value (`inspekt-dev`, public in this repo); anywhere else,
-copy `.env.example` to `.env` and set `INSPEKT_DB_PASSWORD`.
+With the full stack (`docker compose up --build`), a scan is queued and
+fetched by id. The MariaDB password defaults to a **dev-only** value
+(`inspekt-dev`, public in this repo); anywhere else, copy `.env.example` to
+`.env` and set `INSPEKT_DB_PASSWORD`.
 
 ```bash
 $ curl -si --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
@@ -86,146 +91,191 @@ flowchart LR
 - **Idempotent:** the same message posted twice is one scan.
 - **At-least-once:** the result is saved to MariaDB first (an idempotent
   upsert), then the entry is acknowledged in the same Redis transaction that
-  marks it done. A worker that dies mid-scan leaves the entry pending;
-  the watchdog hands it to a live worker after 60 s.
-- **Poison messages** (e.g. a parser panic) are dead-lettered with the
-  reason after 3 attempts; unparseable input fails at once without retries.
+  marks it done. A worker that dies mid-scan leaves the entry pending; the
+  watchdog hands it to a live worker after 60 s.
+- **Poison messages** (e.g. a parser panic) are dead-lettered with the reason
+  after 3 attempts; unparseable input fails at once without retries.
 - **Backpressure:** Redis runs with `maxmemory 64mb` and `noeviction`; when
   full, the API answers `503` with `Retry-After` instead of losing queued scans.
-- **Graceful shutdown:** on SIGTERM the worker stops reading and finishes and
+- **Graceful shutdown:** on SIGTERM the worker stops reading, then finishes and
   acknowledges what it is analysing.
-- `/readyz` checks Redis; `/metrics` adds queue lag, pending and dead-letter
-  counts.
+- `/readyz` checks Redis and MariaDB; `/metrics` adds queue lag, pending and
+  dead-letter counts.
 
 ### Analysis
 
 ```mermaid
 flowchart LR
-  A[POST /v1/scans<br/>raw .eml] --> P[email.Parse<br/>size / part / depth limits]
+  A[raw .eml] --> P[email.Parse<br/>size / part / depth limits]
   P --> X[extract.Links<br/>text, HTML anchors, forms]
-  X --> E[analyze.Engine]
   P --> Q[qr.Scan<br/>QR codes in images,<br/>bounded]
+  X --> E[analyze.Engine]
   Q -- "links (source qr_code)" --> E
   E --> C1[auth] & C2[sender] & C3[lookalike] & C4[links] & C5[attachments] & C6[lure]
   C1 & C2 & C3 & C4 & C5 & C6 --> M[merge signals<br/>score → verdict]
-  M --> R[JSON report + metrics]
+  M --> R[JSON report]
 ```
 
 | Package | Responsibility |
 |---|---|
 | `internal/email` | Hostile-input MIME parser (stdlib only), limits, attachment hashing |
-| `internal/extract` | Links with visible anchor text, form actions |
-| `internal/analyze` | Independent checks, signal merging, scoring, verdict |
+| `internal/extract` | Links with visible anchor text, form actions (fuzz-tested) |
 | `internal/qr` | QR codes in image attachments → links, with image count / size / pixel / time limits |
 | `internal/auth` | Native SPF / DKIM / DMARC verification behind an injectable DNS `Resolver` |
+| `internal/analyze` | Independent checks, signal merging, scoring, verdict |
 | `internal/api` | HTTP API (async with a queue, inline without), Prometheus-format metrics |
 | `internal/queue` | Redis Streams producer, worker pool, watchdog, dead-letter queue |
-| `internal/store` | `Store` interface; MariaDB (upsert, signals table, embedded migrations under a named lock) and in-memory |
+| `internal/store` | `Store` interface; MariaDB (upsert, signals table, migrations under a named lock) and in-memory |
 | `internal/pipeline` | What a worker does with a job: analyse, then save |
-| `migrations/` | Numbered SQL files, embedded in the binaries and applied at startup |
 | `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
-| `eval/` | Precision / recall / FPR, false-positive drivers, CI quality gate |
+| `migrations/` | Numbered SQL files, embedded in the binaries and applied at startup |
+| `cmd/` | `inspekt` (CLI), `inspekt-api`, `inspekt-worker`, `inspekt-load` (load generator) |
+| `eval/` | Corpus fetch (pinned), held-out split, precision / recall / FPR, analysis, CI gates |
+
+## Detection quality
+
+Measured with `make eval` on public corpora. Sources, checksums, every
+intermediate result and the full analysis are in
+[`docs/EVAL.md`](docs/EVAL.md).
+
+| Corpus | Ham | Phish | Precision | Recall | F1 | FPR |
+|---|---|---|---|---|---|---|
+| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9108 | 0.1894 | 0.3135 | 0.0092 |
+| — dev split (80 %) | 3,357 | 1,641 | 0.9083 | 0.1871 | | 0.0092 |
+| — holdout split (20 %) | 793 | 408 | 0.9205 | 0.1985 | | 0.0088 |
+| CI subset (holdout, fixed) | 100 | 100 | 0.9412 | 0.16 | | 0.01 |
+| Sample (`testdata/`) | 2 | 5 | 1.00 | 0.80 | | 0.00 |
+
+**What this says.** The rules are precise (about 9 in 10 flags are right,
+under 1 % of legitimate mail is flagged) but catch **about one phishing
+message in five**. Most misses link to legitimate infrastructure that
+attackers abuse (IPFS gateways, Google, Cloudflare R2, Firebase,
+click-tracking redirects): nothing is structurally wrong, so a structural
+rule set cannot see them. That is the main thing to build next.
+
+**How it was measured.** A fixed 80/20 dev/holdout split by hash of the file
+path; changes were chosen on dev and kept only if holdout agreed. Two weights
+changed on that evidence (`html_form_in_email` 30 → 10, which cut false
+positives by two thirds; `missing_from` 20 → 30). The ham is 20 years older
+than the phishing, which makes authentication signals look perfect; no
+weight was raised because of that. The evaluation's first run also found a
+crash in HTML link extraction on non-ASCII input (now fixed and fuzz-tested).
+
+**Gates.** CI fails if detection regresses: the 7 hand-made samples
+(`--min-recall 0.8 --max-fpr 0`; the one miss, `bec_reply_to.eml`, is a
+documented gap for the grey-zone LLM) and a fixed 200-message holdout subset
+of the public corpora (`--min-recall 0.16 --max-fpr 0.01`), rebuilt in CI
+from the pinned downloads because the SpamAssassin texts may not be
+redistributed. Both gates sit exactly at today's numbers, and parse errors
+fail them too.
+
+## Performance
+
+Details, raw numbers and method in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+MacBook Air 13" M3 (2024), 8 GB RAM.
+
+| Measure | Result |
+|---|---|
+| Parse a typical message | 3,401–9,121 ns (119.7–176.3 MB/s) |
+| Analyse a typical message | 6,265–15,009 ns |
+| Analyse with a QR code to decode | 327,596 ns |
+| Analyse a 300-link newsletter | 474,789 ns (1,879,144 ns before profiling) |
+| CLI over the public corpus | 2,018.0–2,176.9 messages/s, one process |
+| Full Docker stack, 32 clients, real corpus mix | 868.1 scans/s; end-to-end p50 28.3 ms, p95 78.4 ms, p99 149.7 ms |
+| Full Docker stack, 64 clients, polling every 50 ms | 980.9 scans/s; end-to-end p95 116.2 ms |
+
+Profiling with `pprof` showed ~91 % of the engine's allocations in the
+lookalike check (protected-brand forms re-derived for every link); fixing it
+made link-heavy mail 4× faster with identical results on all 6,199 corpus
+messages. The load test found a real bug: InnoDB deadlocks between
+concurrent workers saving signals (scans survived, but waited a minute for
+the watchdog); fixed and covered by a 200-way concurrent test. In the load
+test the limit is the read path that client polling creates, not analysis.
 
 ## Design decisions
 
-- **Every input is hostile.** The parser caps size, MIME part count and nesting
-  depth, strips paths from attachment names, and is fuzz-tested in CI.
+- **Every input is hostile.** The parser caps size, MIME parts and nesting;
+  images are checked against pixel limits *from their header* before any
+  pixel is decoded (a 67-byte PNG claiming 50000×50000 is rejected in
+  microseconds); decoding is time- and concurrency-bounded; the parser and
+  the HTML link extractor are fuzz-tested in CI.
 - **Explainability over a black box.** Checks emit signals with evidence;
   duplicate signals merge so ten copies of one bad link count once.
 - **Forged headers are not evidence.** `Authentication-Results` is trusted only
   from configured authserv-ids, and `INSPEKT_AUTH_MODE=verify` ignores it
-  entirely: Inspekt checks SPF, DKIM and DMARC (with alignment) against DNS
-  itself. All DNS goes through an interface, so tests use a fake DNS.
+  entirely: Inspekt checks SPF, DKIM and DMARC (with alignment) itself. All DNS
+  goes through an interface, so tests use a fake DNS.
 - **An outage never looks like an attack.** DNS failures become `temperror`
   and an informational `auth_unverified` signal worth 0 points.
+- **A crash can cause a repeat, never a loss.** Results are saved before the
+  queue entry is acknowledged; saving is an idempotent upsert keyed by the
+  message hash, so a redelivered scan overwrites instead of duplicating.
+- **Configuration is a claim until a test proves it.** `noeviction` looked
+  right, but Redis 7 does not memory-check unflagged Lua scripts; the enqueue
+  now uses `WATCH`/`MULTI`, and the end-to-end test fills Redis on purpose.
 - **Wording rules carry little weight** (max 10 points). LLM-written phishing
   defeats keyword lists, so structural signals decide verdicts.
-- **Thresholds change only with an eval run.**
-
-## Detection quality
-
-Measured with `make eval` on public corpora (details, sources, checksums and
-every intermediate result in [`docs/EVAL.md`](docs/EVAL.md)):
-
-| Corpus | Ham | Phish | Precision | Recall | F1 | FPR | Throughput |
-|---|---|---|---|---|---|---|---|
-| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9108 | 0.1894 | 0.3135 | 0.0092 | 2,018.0–2,176.9 msg/s |
-| — dev split (80 %) | 3,357 | 1,641 | 0.9083 | 0.1871 | | 0.0092 | |
-| — holdout split (20 %) | 793 | 408 | 0.9205 | 0.1985 | | 0.0088 | |
-| CI subset (holdout, fixed) | 100 | 100 | 0.9412 | 0.16 | | 0.01 | |
-| Sample (`testdata/`) | 2 | 5 | 1.00 | 0.80 | | 0.00 | |
-
-**What this says:** the rules are precise (about 9 in 10 flags are right,
-under 1 % of legitimate mail is flagged) but catch **about one phishing
-message in five**. Most misses link to legitimate infrastructure attackers
-abuse (IPFS gateways, Google, Cloudflare R2, Firebase, click-tracking
-redirects): nothing is structurally wrong, so a structural rule set cannot
-see them. Two weights were changed on evidence (`html_form_in_email` 30 → 10,
-`missing_from` 20 → 30), each checked on the held-out split. The ham is
-20 years older than the phishing, which flatters authentication signals;
-see the biases section of `docs/EVAL.md`. Throughput is the CLI on an
-Apple M3, one process.
-
-On the sample corpus:
-
-The one miss is a deliberate, documented gap (see `testdata/labels.csv` and the
-roadmap), and rules are not tuned to hide it: `bec_reply_to.eml` is a
-text-only business-email compromise from a correctly authenticated domain,
-whose only technical signal is a Reply-To mismatch.
-
-`qr_phish.eml`, whose phishing URL exists only inside a QR code image, was
-the second gap until QR decoding (step 4): recall went from 0.60 to 0.80, and
-the gate was raised with it.
-
-The sample gate (`--min-recall 0.8 --max-fpr 0 --max-parse-errors 0`) therefore
-has no slack: losing any currently caught phish, flagging either legitimate
-message, or failing to parse a sample fails CI.
+- **Weights change only with an eval run**, decided on the dev split and
+  confirmed on the holdout.
 
 ## Known limitations
 
+- **Recall is low (0.19)** on modern phishing that uses legitimate hosting;
+  see [What I'd do next](#what-id-do-next).
+- The public ham predates SPF, DKIM, DMARC and URL shorteners, so their
+  false-positive cost is not measured. `dmarc_fail` scores 35 regardless of
+  the domain's policy: 39 of 51 DMARC-failing phishing messages came from
+  `p=none` domains, and down-weighting would miss 35 of them, but the cost on
+  legitimately forwarded mail is unmeasured.
+- Click-tracking redirectors in legitimate newsletters still trigger
+  `link_text_mismatch` (the main remaining false-positive class).
 - Registrable domains use a small built-in suffix table instead of the full
   Public Suffix List.
-- Authentication defaults to `INSPEKT_AUTH_MODE=headers` (read upstream
-  `Authentication-Results`). `verify` mode checks DNS live, which is right for
-  mail arriving now but wrong for archived corpora: their DKIM keys are often
-  rotated out of DNS and their SPF records have changed, so old legitimate mail
-  would fail. Evaluations on public corpora therefore run in `headers` mode.
-- `verify` mode takes the client IP and HELO name from the **topmost**
-  `Received` header and assumes our own MTA wrote it. Deploy Inspekt directly
-  behind that MTA; headers further down can be forged and are never read.
-- Queue state (queued / failed) lives in Redis for 24 h; finished results
-  are kept in MariaDB with no retention policy yet. A message resubmitted
-  after its Redis entry expired is analysed again and its row updated
-  (keeping the original `received_at`). Every worker restart leaves an idle
-  consumer name in the group; harmless, but not cleaned up yet.
-- Migrations only move forward, and MariaDB cannot roll back DDL: a
-  migration file that fails halfway must be fixed by hand.
-- A transiently failed scan is retried only when the watchdog reclaims it,
-  so a retry takes about 60 s.
-- Redis checks `maxmemory` before each write, so one write can overshoot it
-  by up to a full message (25 MiB). The Redis container's memory limit
-  (160 MiB) leaves room for that.
-- DMARC `pct=` is ignored and the policy is reported, not enforced.
-- `dmarc_fail` scores 35 regardless of the domain's policy. Decided with
-  data (docs/EVAL.md): 39 of 51 DMARC-failing phishing messages came from
-  `p=none` domains, and down-weighting would miss 35 of them. The
-  false-positive cost (forwarding and mailing lists break DMARC) could not
-  be measured, because the public ham corpus predates DMARC.
-- HTML and archive attachments are flagged by type, not opened.
-- QR codes are read from PNG, JPEG and GIF attachments only: not from images
-  embedded as `data:` URIs in HTML, inside PDFs or Office files, and only
-  one QR code per image. Images beyond the limits (10 per message, 5 MiB,
-  4000×4000 px, 2 s each) are skipped with a 0-point `qr_not_scanned` signal.
-  A decode that times out keeps running in the background until it ends;
-  the pixel limit bounds that cost.
+- `verify` auth mode takes the client IP and HELO from the **topmost**
+  `Received` header and assumes our own MTA wrote it; deploy directly behind
+  that MTA. It is wrong for archived mail (rotated DKIM keys), so evaluations
+  run in `headers` mode. DMARC `pct=` is ignored.
+- Queue state lives in Redis for 24 h; results in MariaDB have no retention
+  policy yet. A transiently failed scan is retried only when the watchdog
+  reclaims it (about 60 s). Worker restarts leave idle consumer names in the
+  group. Migrations only move forward, and MariaDB cannot roll back DDL.
+- Redis checks `maxmemory` before each write, so one write can overshoot it by
+  up to a full message (25 MiB); the container limit (160 MiB) leaves room.
+- HTML and archive attachments are flagged by type, not opened. QR codes are
+  read from PNG, JPEG and GIF attachments only (not `data:` URIs, PDFs or
+  Office files), one per image, within the limits (10 images, 5 MiB,
+  4000×4000 px, 2 s each); skipped images give a 0-point `qr_not_scanned`
+  signal.
 
-## Roadmap
+## What I'd do next
 
-See [`docs/WEEKEND_PLAN.md`](docs/WEEKEND_PLAN.md): native SPF/DKIM/DMARC,
-Redis Streams worker pipeline with watchdog and dead-letter queue, QR-code
-decoding, MariaDB storage, grey-zone LLM classifier for BEC, evaluation on
-public corpora, Grafana dashboards and benchmarks.
+In order of expected impact on the measured weaknesses:
+
+1. **Abusable-hosting signal**: links to IPFS gateways, `r2.dev`, `glitch.me`,
+   `web.app`, `workers.dev`, `pages.dev` and similar free hosting, combined
+   with credential wording or a brand name in the path. The largest group of
+   misses in `docs/EVAL.md`.
+2. **Open-redirect unwrapping**: run the link checks on the destination inside
+   `google.com/url?q=`, `doubleclick.net` and ESP click links, without fetching.
+3. **A modern ham corpus** (with DMARC, shorteners, forwarding) to measure the
+   false-positive cost of authentication signals and settle the `p=none` risk.
+4. **Prometheus histograms and a Grafana dashboard** (per-check latency, queue
+   lag, dead letters) — next in the plan.
+5. **The grey-zone LLM** for text-only BEC, called only for borderline scores,
+   allowed only to *add* points (prompt injection cannot clean a message).
+6. **Webhooks or long polling** for results instead of client polling, which
+   the load test showed is the throughput limit.
+7. URL reputation feeds, the full Public Suffix List, a retention policy for
+   results.
+
+## Documentation
+
+- [`docs/EVAL.md`](docs/EVAL.md): corpora, method, every result, analysis, decisions
+- [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md): micro-benchmarks, profiling, load test
+- [`docs/NOTES.md`](docs/NOTES.md): each step explained simply, with interview questions
+- [`docs/WEEKEND_PLAN.md`](docs/WEEKEND_PLAN.md): the build plan
 
 ## License
 
-MIT
+MIT. The evaluation corpora are not included; `eval/fetch_corpora.sh` downloads
+them from their sources (Nazario corpus: CC BY 4.0, José Nazario).

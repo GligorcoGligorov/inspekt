@@ -1,9 +1,11 @@
-.PHONY: test test-db race fuzz lint build run worker scan e2e corpora eval eval-subset eval-sample clean
+.PHONY: test test-db race fuzz lint bench load build run worker scan e2e corpora eval eval-subset eval-sample clean
 
 test:        ; go test ./... && python3 -m unittest discover -s eval
 test-db:     ; ./scripts/test-db.sh
 race:        ; go test -race ./...
 fuzz:        ; go test ./internal/email -run='^$$' -fuzz=FuzzParse -fuzztime=60s
+bench:       ; go test -run='^$$' -bench=. -benchtime=2s ./internal/analyze
+load:        ; go run ./cmd/inspekt-load -n 5000 -c 32   # needs `docker compose up -d`
 lint:        ; go vet ./... && test -z "$$(gofmt -l .)"
 build:       ; go build -o bin/ ./cmd/...
 run:         ; go run ./cmd/inspekt-api
