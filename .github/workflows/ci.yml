@@ -4,6 +4,21 @@ on: [push, pull_request]
 jobs:
   go:
     runs-on: ubuntu-latest
+    # Real MariaDB for the store tests (they skip without the DSN).
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: inspekt_test
+          MARIADB_USER: inspekt
+          MARIADB_PASSWORD: inspekt
+          MARIADB_RANDOM_ROOT_PASSWORD: "1"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      INSPEKT_TEST_MARIADB_DSN: inspekt:inspekt@tcp(127.0.0.1:3306)/inspekt_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

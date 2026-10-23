@@ -1,6 +1,7 @@
-.PHONY: test race fuzz lint build run worker scan e2e eval eval-sample clean
+.PHONY: test test-db race fuzz lint build run worker scan e2e eval eval-sample clean
 
 test:        ; go test ./... && python3 -m unittest discover -s eval
+test-db:     ; ./scripts/test-db.sh
 race:        ; go test -race ./...
 fuzz:        ; go test ./internal/email -run='^$$' -fuzz=FuzzParse -fuzztime=60s
 lint:        ; go vet ./... && test -z "$$(gofmt -l .)"

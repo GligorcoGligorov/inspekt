@@ -18,7 +18,9 @@ import (
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/pipeline"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
+	"github.com/GligorcoGligorov/inspekt/internal/store"
 )
 
 func newTestServer() *httptest.Server {
@@ -76,7 +78,8 @@ func TestScanRejectsOversized(t *testing.T) {
 }
 
 // asyncStack is the production wiring in one process: the API queues into
-// (in-memory) Redis and a real worker runs the real engine.
+// (in-memory) Redis, a real worker runs the real engine and saves to an
+// in-memory Store, and the API reads results back from that Store.
 func asyncStack(t *testing.T) (*httptest.Server, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -86,20 +89,15 @@ func asyncStack(t *testing.T) (*httptest.Server, *miniredis.Miniredis) {
 	eng := analyze.New(analyze.DefaultConfig)
 	lim := email.Limits{MaxBytes: 64 << 10, MaxParts: 50, MaxDepth: 5}
 
+	st := &store.Memory{}
 	w := &queue.Worker{Q: q, Name: "t", Concurrency: 2, Block: 20 * time.Millisecond,
-		Handle: func(_ context.Context, raw []byte) ([]byte, error) {
-			rep, err := eng.ScanRaw(raw, lim)
-			if err != nil {
-				return nil, queue.Permanent(err)
-			}
-			return json.Marshal(rep)
-		}}
+		Handle: pipeline.Handler(eng, lim, st)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = w.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	s := &Server{Engine: eng, Limits: lim, Queue: q, Log: slog.New(slog.DiscardHandler)}
+	s := &Server{Engine: eng, Limits: lim, Queue: q, Store: st, Log: slog.New(slog.DiscardHandler)}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts, mr
@@ -119,14 +117,23 @@ func postFile(t *testing.T, url, file string) *http.Response {
 	return res
 }
 
-func pollScan(t *testing.T, base, location string) queue.Scan {
+// scanBody is the GET /v1/scans/{id} response.
+type scanBody struct {
+	Status     queue.Status    `json:"status"`
+	Error      string          `json:"error"`
+	ReceivedAt *time.Time      `json:"received_at"`
+	ScannedAt  *time.Time      `json:"scanned_at"`
+	Report     json.RawMessage `json:"report"`
+}
+
+func pollScan(t *testing.T, base, location string) scanBody {
 	t.Helper()
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		res, err := http.Get(base + location)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var s queue.Scan
+		var s scanBody
 		err = json.NewDecoder(res.Body).Decode(&s)
 		res.Body.Close()
 		if err != nil {
@@ -137,7 +144,7 @@ func pollScan(t *testing.T, base, location string) queue.Scan {
 		}
 	}
 	t.Fatalf("%s still queued", location)
-	return queue.Scan{}
+	return scanBody{}
 }
 
 func TestAsyncScan(t *testing.T) {
@@ -155,6 +162,9 @@ func TestAsyncScan(t *testing.T) {
 	}
 	if rep.Verdict != analyze.VerdictMalicious {
 		t.Fatalf("verdict %s", rep.Verdict)
+	}
+	if s.ReceivedAt == nil || s.ScannedAt == nil || s.ScannedAt.Before(*s.ReceivedAt) {
+		t.Fatalf("result not served from the store: received %v, scanned %v", s.ReceivedAt, s.ScannedAt)
 	}
 
 	// Same message again: same id, reported as already done.

@@ -311,3 +311,94 @@ test peaked at ~207 MiB with no OOM kill.
    0-point `qr_not_scanned` signal, so the analyst sees it. Once evaluation
    data exists, that signal could carry a few points, because legitimate
    mail rarely trips these limits.
+
+---
+
+## Step 5: Results in MariaDB
+
+### Why
+
+Until now a finished scan lived in Redis for 24 hours and then was gone.
+Redis is memory (we gave it 64 MB), and a queue is not a database. Results
+need to be kept, and questions about them need answers: "how many malicious
+emails this week?", "which signal causes the most false positives?". That
+is a job for a relational database. MariaDB is in Hornetsecurity's stack.
+
+### The schema (`migrations/001_init.sql`)
+
+- `scans`: one row per distinct email (`id` = SHA-256 of the message, the
+  same id as in the queue): `received_at` (when the API accepted it),
+  `scanned_at`, `verdict`, `score`, `engine` (rule-set version),
+  `from_domain`, and the full `report` as JSON.
+- `signals`: one row per signal per scan (`scan_id`, `signal_id`, `score`).
+  The same data is also inside the JSON report, stored twice on purpose:
+  the JSON is for showing one scan, the table is for **counting across
+  scans** with an index (`idx_signals_signal`) instead of parsing millions
+  of JSON documents.
+- Indexes follow the questions we expect: by time, by verdict and time, by
+  sender domain and time.
+
+### How it fits the queue
+
+The worker now: analyses → **saves to MariaDB** → marks done in Redis and
+XACKs. The order matters. If the worker dies after saving but before XACK,
+the message is processed again. That is fine, because saving is an
+**upsert** (`INSERT ... ON DUPLICATE KEY UPDATE`) and the signals are
+deleted and re-inserted in the same transaction, so a second save
+overwrites instead of duplicating. That is "at-least-once delivery +
+idempotent processing", which together behave like "exactly once" for the
+data.
+
+If MariaDB is down, the save fails, the message is **not** acknowledged,
+and it is retried later. A result is never marked done unless it is saved.
+
+`GET /v1/scans/{id}` asks MariaDB first (finished results, kept forever),
+then Redis (still queued, or failed). The e2e test proves results survive
+Redis being wiped with `FLUSHALL`.
+
+### Migrations without a migration tool
+
+The SQL files are embedded into the Go binaries (`go:embed`), and both the
+API and the worker apply missing ones at startup, recording them in
+`schema_migrations`. They start at the same time, so two processes could
+both try to create the same table. `GET_LOCK('inspekt_migrate')` (a MariaDB
+named lock) makes them take turns. A test starts three migrators at once.
+Removing the lock makes that test fail with "Table 'scans' already exists".
+
+One caveat: MariaDB cannot roll back `CREATE TABLE`/`ALTER TABLE`. A
+migration that fails halfway leaves part of it applied, so keep one
+change per file.
+
+### Tests
+
+The same **contract test** runs against both `Store` implementations
+(in-memory, used by the fast API tests, and MariaDB), so they cannot
+behave differently. The MariaDB part needs a real server: CI starts one as
+a service container; locally `make test-db` starts a throwaway one.
+
+### Interview questions
+
+1. **"Why save to MariaDB before acknowledging in Redis, and what if the
+   worker crashes in between?"**
+   If we acknowledged first and then crashed, the message would be gone and
+   the result never saved: data loss. Saving first means a crash can only
+   cause a **repeat**, never a loss. Repeats are harmless because the save
+   is an idempotent upsert keyed by the message hash. I prefer a duplicate
+   I can absorb to a loss I can't detect.
+
+2. **"Why store signals in their own table when they are already in the
+   JSON report?"**
+   Different questions. The JSON answers "show me this scan". The table
+   answers "how often did X fire on clean mail this week?", which needs an
+   index, not a JSON scan over every row. It is deliberate denormalisation:
+   the report is the source of truth, and the signals table is rebuilt from
+   it inside the same transaction on every save, so they cannot drift.
+
+3. **"Two instances start at the same moment and both run migrations. What
+   happens?"**
+   Without coordination, both see "001 not applied" and both run
+   `CREATE TABLE`; one fails. I take a MariaDB named lock (`GET_LOCK`) on a
+   single connection, so the second instance waits, then sees 001 already
+   recorded and does nothing. A test runs three migrators concurrently, and
+   fails if the lock is removed. In a bigger setup I would run migrations as
+   a separate deploy step instead of at startup.

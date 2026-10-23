@@ -92,6 +92,16 @@ grep -qi '^retry-after:' "$hdr" || fail "503 without Retry-After"
 rm -f "$hdr"
 echo ok
 
+step "results are persisted in MariaDB and outlive Redis"
+docker compose exec -T redis redis-cli FLUSHALL >/dev/null
+body=$(curl -sf "$BASE$phish") || fail "GET $phish after Redis flush"
+jq -e '.status == "done" and .report.verdict == "malicious" and .received_at != null and .scanned_at != null' <<<"$body" >/dev/null ||
+	fail "after Redis flush: $(jq -c '{status, verdict: .report.verdict, received_at}' <<<"$body")"
+sigs=$(docker compose exec -T mariadb mariadb -N -uinspekt -p"${INSPEKT_DB_PASSWORD:-inspekt-dev}" inspekt \
+	-e "SELECT COUNT(*) FROM signals WHERE scan_id = '${phish##*/}'")
+[ "$sigs" -ge 5 ] || fail "signals rows for the phish: $sigs"
+echo "ok served from MariaDB, $sigs signal rows"
+
 step "metrics"
 metrics=$(curl -sf "$BASE/metrics")
 grep -E '^inspekt_queue_(lag|pending|dead_letters)' <<<"$metrics"

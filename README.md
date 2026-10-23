@@ -33,11 +33,12 @@ make scan          # scan the sample messages
 make eval-sample   # precision / recall on the sample corpus
 make run           # HTTP API on :8080, scans analysed inline (no Redis needed)
 curl --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
+make test-db       # store tests against a throwaway MariaDB container
 make e2e           # full stack in Docker + end-to-end checks
 ```
 
-With the full stack (`docker compose up --build`: API, Redis, worker), a scan
-is queued and fetched by id:
+With the full stack (`docker compose up --build`: API, Redis, worker,
+MariaDB), a scan is queued and fetched by id:
 
 ```bash
 $ curl -si --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
@@ -45,9 +46,20 @@ HTTP/1.1 202 Accepted
 Location: /v1/scans/8f3c…
 {"id":"8f3c…","status":"queued"}
 
-$ curl -s localhost:8080/v1/scans/8f3c… | jq '.status, .report.verdict'
+$ curl -s localhost:8080/v1/scans/8f3c… | jq '.status, .report.verdict, .received_at'
 "done"
 "malicious"
+"2026-10-24T09:00:00.123Z"
+```
+
+Results land in MariaDB with one row per signal, so detection questions are
+plain SQL:
+
+```sql
+-- Which signals fire on mail we called clean? (false-positive drivers)
+SELECT signal_id, COUNT(*) FROM signals JOIN scans ON scans.id = signals.scan_id
+WHERE verdict = 'clean' AND received_at > NOW() - INTERVAL 7 DAY
+GROUP BY signal_id ORDER BY 2 DESC;
 ```
 
 ## Architecture
@@ -60,16 +72,19 @@ flowchart LR
   API -- "202 + id<br/>(id = SHA-256 of message)" --> C
   API -- "WATCH/MULTI: raw + status + XADD" --> S[(Redis Stream<br/>scans)]
   S -- "XREADGROUP<br/>consumer group" --> W[inspekt-worker<br/>N goroutines]
-  W -- "store result + XACK<br/>in one MULTI" --> H[(scan:id hash)]
+  W -- "1. save result" --> DB[(MariaDB<br/>scans, signals)]
+  W -- "2. status + XACK<br/>in one MULTI" --> H[(scan:id hash)]
   C -- "GET /v1/scans/id" --> API
-  API --> H
+  API -- "done" --> DB
+  API -- "queued / failed" --> H
   WD[watchdog<br/>XAUTOCLAIM idle > 60 s] -.-> S
   W -- "after 3 attempts" --> D[(scans:dead)]
 ```
 
 - **Idempotent:** the same message posted twice is one scan.
-- **At-least-once:** the entry is acknowledged in the same transaction that
-  stores the result. A worker that dies mid-scan leaves the entry pending;
+- **At-least-once:** the result is saved to MariaDB first (an idempotent
+  upsert), then the entry is acknowledged in the same Redis transaction that
+  marks it done. A worker that dies mid-scan leaves the entry pending;
   the watchdog hands it to a live worker after 60 s.
 - **Poison messages** (e.g. a parser panic) are dead-lettered with the
   reason after 3 attempts; unparseable input fails at once without retries.
@@ -103,6 +118,9 @@ flowchart LR
 | `internal/auth` | Native SPF / DKIM / DMARC verification behind an injectable DNS `Resolver` |
 | `internal/api` | HTTP API (async with a queue, inline without), Prometheus-format metrics |
 | `internal/queue` | Redis Streams producer, worker pool, watchdog, dead-letter queue |
+| `internal/store` | `Store` interface; MariaDB (upsert, signals table, embedded migrations under a named lock) and in-memory |
+| `internal/pipeline` | What a worker does with a job: analyse, then save |
+| `migrations/` | Numbered SQL files, embedded in the binaries and applied at startup |
 | `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
 | `eval/` | Precision / recall / FPR, false-positive drivers, CI quality gate |
 
@@ -153,9 +171,13 @@ message, or failing to parse a sample fails CI.
 - `verify` mode takes the client IP and HELO name from the **topmost**
   `Received` header and assumes our own MTA wrote it. Deploy Inspekt directly
   behind that MTA; headers further down can be forged and are never read.
-- Scan results live in Redis for 24 h (MariaDB storage is step 5). Every
-  worker restart leaves an idle consumer name in the group; harmless, but
-  not cleaned up yet.
+- Queue state (queued / failed) lives in Redis for 24 h; finished results
+  are kept in MariaDB with no retention policy yet. A message resubmitted
+  after its Redis entry expired is analysed again and its row updated
+  (keeping the original `received_at`). Every worker restart leaves an idle
+  consumer name in the group; harmless, but not cleaned up yet.
+- Migrations only move forward, and MariaDB cannot roll back DDL: a
+  migration file that fails halfway must be fixed by hand.
 - A transiently failed scan is retried only when the watchdog reclaims it,
   so a retry takes about 60 s.
 - Redis checks `maxmemory` before each write, so one write can overshoot it

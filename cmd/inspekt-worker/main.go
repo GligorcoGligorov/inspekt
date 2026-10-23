@@ -1,7 +1,10 @@
 // Command inspekt-worker analyses scans queued by inspekt-api.
 //
-//	INSPEKT_REDIS_ADDR  Redis address (default localhost:6379)
-//	INSPEKT_WORKERS     concurrent consumers in this process (default 4)
+//	INSPEKT_REDIS_ADDR    Redis address (default localhost:6379)
+//	INSPEKT_WORKERS       concurrent consumers in this process (default 4)
+//	INSPEKT_MARIADB_DSN   where results are kept, e.g.
+//	                      inspekt:secret@tcp(mariadb:3306)/inspekt
+//	                      (unset: results stay in Redis for 24 h)
 //
 // Run as many processes as needed: each joins the same consumer group, and
 // Redis hands every queued scan to exactly one of them.
@@ -9,7 +12,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,7 +22,10 @@ import (
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/pipeline"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
+	"github.com/GligorcoGligorov/inspekt/internal/store"
+	"github.com/GligorcoGligorov/inspekt/migrations"
 )
 
 func main() {
@@ -42,6 +47,22 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{Addr: config.Env("INSPEKT_REDIS_ADDR", "localhost:6379")})
 	defer rdb.Close()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var st store.Store
+	if dsn := config.Env("INSPEKT_MARIADB_DSN", ""); dsn != "" {
+		db, err := store.Open(dsn)
+		if err != nil {
+			fatal("mariadb", err)
+		}
+		defer db.Close()
+		if err := store.Migrate(ctx, db, migrations.FS); err != nil {
+			fatal("migrate", err)
+		}
+		st = &store.MariaDB{DB: db}
+	}
+
 	// The hostname (container id under Docker) keeps consumer names unique
 	// per process. After a restart the old name's unacknowledged entries
 	// are picked up by a watchdog.
@@ -51,21 +72,13 @@ func main() {
 		Name:        host,
 		Concurrency: workers,
 		Log:         log,
-		Handle: func(_ context.Context, raw []byte) ([]byte, error) {
-			rep, err := eng.ScanRaw(raw, email.DefaultLimits)
-			if err != nil {
-				return nil, queue.Permanent(err) // unparseable: retrying won't help
-			}
-			return json.Marshal(rep)
-		},
+		Handle:      pipeline.Handler(eng, email.DefaultLimits, st),
 	}
 
 	// SIGTERM (docker stop, a deploy) stops reading; scans in progress
 	// finish and are acknowledged before the process exits.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	log.Info("worker started", "consumer", host, "workers", workers,
-		"engine", analyze.Version, "auth_mode", config.AuthMode())
+		"engine", analyze.Version, "auth_mode", config.AuthMode(), "store", st != nil)
 	if err := w.Run(ctx); err != nil {
 		log.Error("worker", "err", err)
 		os.Exit(1)

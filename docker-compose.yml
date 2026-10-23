@@ -1,5 +1,6 @@
-# Step 3: API + Redis Streams + worker. Step 5 adds mariadb,
-# step 7 prometheus + grafana (see docs/WEEKEND_PLAN.md).
+# API + Redis Streams + worker + MariaDB. Step 7 adds prometheus + grafana
+# (see docs/WEEKEND_PLAN.md). The database password defaults to a dev value;
+# set INSPEKT_DB_PASSWORD in the environment or a .env file anywhere else.
 x-inspekt: &inspekt
   build: .
   image: inspekt:local
@@ -7,6 +8,7 @@ x-inspekt: &inspekt
   restart: unless-stopped
   depends_on:
     redis: { condition: service_healthy }
+    mariadb: { condition: service_healthy }
 
 services:
   redis:
@@ -30,6 +32,25 @@ services:
       resources:
         limits: { memory: 160m }
 
+  mariadb:
+    image: mariadb:11.4
+    # Small footprint for a laptop: 32 MB buffer pool, no performance_schema.
+    command: ["--innodb-buffer-pool-size=32M", "--performance-schema=OFF"]
+    environment:
+      MARIADB_DATABASE: inspekt
+      MARIADB_USER: inspekt
+      MARIADB_PASSWORD: ${INSPEKT_DB_PASSWORD:-inspekt-dev}
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    volumes: ["mariadb-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    deploy:
+      resources:
+        limits: { memory: 256m }
+
   api:
     <<: *inspekt
     command: ["/inspekt-api"]
@@ -37,6 +58,7 @@ services:
     environment:
       INSPEKT_ADDR: ":8080"
       INSPEKT_REDIS_ADDR: "redis:6379"
+      INSPEKT_MARIADB_DSN: "inspekt:${INSPEKT_DB_PASSWORD:-inspekt-dev}@tcp(mariadb:3306)/inspekt"
       INSPEKT_TRUSTED_AUTHSERV_IDS: ""   # e.g. mx.yourcompany.com in production
       INSPEKT_AUTH_MODE: headers         # verify = own SPF/DKIM/DMARC via DNS
     deploy:
@@ -48,6 +70,7 @@ services:
     command: ["/inspekt-worker"]
     environment:
       INSPEKT_REDIS_ADDR: "redis:6379"
+      INSPEKT_MARIADB_DSN: "inspekt:${INSPEKT_DB_PASSWORD:-inspekt-dev}@tcp(mariadb:3306)/inspekt"
       INSPEKT_WORKERS: "4"
       # Go's GC does not see the container limit; without this the heap
       # grows to 256m under large QR images and risks an OOM kill.
@@ -62,3 +85,4 @@ services:
 
 volumes:
   redis-data:
+  mariadb-data:

@@ -8,7 +8,8 @@
 //
 // Keys, all expiring after TTL (24 h):
 //
-//	scan:{id}      hash: status, attempts, last_error, error, report
+//	scan:{id}      hash: status, attempts, received_at, last_error, error,
+//	               and report when no Store keeps results
 //	scan:raw:{id}  the raw message, deleted once the scan finishes
 //
 // The id is the SHA-256 of the raw message, which makes submission
@@ -128,7 +129,8 @@ func (q *Queue) Enqueue(ctx context.Context, raw []byte) (string, Status, error)
 		}
 		_, err = tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
 			p.Del(ctx, key)
-			p.HSet(ctx, key, "status", string(StatusQueued), "attempts", 0)
+			p.HSet(ctx, key, "status", string(StatusQueued), "attempts", 0,
+				"received_at", time.Now().UnixMilli())
 			p.PExpire(ctx, key, q.ttl())
 			p.Set(ctx, rawKey(id), raw, q.ttl())
 			p.XAdd(ctx, &redis.XAddArgs{Stream: Stream, MaxLen: q.maxLen(), Approx: true,

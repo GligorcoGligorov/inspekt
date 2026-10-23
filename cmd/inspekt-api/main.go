@@ -4,6 +4,7 @@
 //
 // With INSPEKT_REDIS_ADDR set, scans are queued for inspekt-worker and the
 // POST returns 202 with the scan id; without it, they are analysed inline.
+// With INSPEKT_MARIADB_DSN set too, results are read from MariaDB.
 package main
 
 import (
@@ -23,6 +24,8 @@ import (
 	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
+	"github.com/GligorcoGligorov/inspekt/internal/store"
+	"github.com/GligorcoGligorov/inspekt/migrations"
 )
 
 func main() {
@@ -39,6 +42,21 @@ func main() {
 		defer rdb.Close()
 		q = &queue.Queue{R: rdb}
 	}
+	var st store.Store
+	if dsn := config.Env("INSPEKT_MARIADB_DSN", ""); dsn != "" {
+		db, err := store.Open(dsn)
+		if err != nil {
+			log.Error("mariadb", "err", err)
+			os.Exit(2)
+		}
+		defer db.Close()
+		// The worker migrates too; GET_LOCK makes them take turns.
+		if err := store.Migrate(context.Background(), db, migrations.FS); err != nil {
+			log.Error("migrate", "err", err)
+			os.Exit(2)
+		}
+		st = &store.MariaDB{DB: db}
+	}
 
 	srv := &http.Server{
 		Addr: config.Env("INSPEKT_ADDR", ":8080"),
@@ -47,6 +65,7 @@ func main() {
 			Limits: email.DefaultLimits,
 			Log:    log,
 			Queue:  q,
+			Store:  st,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -66,7 +85,7 @@ func main() {
 	}()
 
 	log.Info("listening", "addr", srv.Addr, "engine", analyze.Version,
-		"auth_mode", config.AuthMode(), "async", q != nil)
+		"auth_mode", config.AuthMode(), "async", q != nil, "store", st != nil)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server", "err", err)
 		os.Exit(1)

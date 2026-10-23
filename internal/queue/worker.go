@@ -12,8 +12,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Handler analyses one raw message and returns the report to store.
-type Handler func(ctx context.Context, raw []byte) ([]byte, error)
+// Job is one queued scan handed to a Handler.
+type Job struct {
+	ID         string
+	Raw        []byte
+	ReceivedAt time.Time // when the API accepted it
+}
+
+// Handler analyses one job. A non-nil result is kept in Redis as the
+// report; a Handler that persists results elsewhere returns nil.
+type Handler func(ctx context.Context, job Job) ([]byte, error)
 
 // Permanent marks an error that retrying cannot fix, such as a message that
 // cannot be parsed. The scan fails at once instead of being retried.
@@ -182,6 +190,10 @@ func (w *Worker) process(ctx context.Context, m redis.XMessage) {
 		return
 	}
 
+	job := Job{ID: id, ReceivedAt: time.Now()}
+	if ms, err := w.Q.R.HGet(ctx, scanKey(id), "received_at").Int64(); err == nil {
+		job.ReceivedAt = time.UnixMilli(ms)
+	}
 	raw, err := w.Q.R.Get(ctx, rawKey(id)).Bytes()
 	if errors.Is(err, redis.Nil) {
 		w.deadLetter(ctx, m, id, attempts, "raw message expired or missing")
@@ -192,7 +204,8 @@ func (w *Worker) process(ctx context.Context, m redis.XMessage) {
 	}
 
 	start := time.Now()
-	report, err := w.safeHandle(ctx, raw)
+	job.Raw = raw
+	report, err := w.safeHandle(ctx, job)
 	var perm permanentError
 	switch {
 	case errors.As(err, &perm):
@@ -203,18 +216,22 @@ func (w *Worker) process(ctx context.Context, m redis.XMessage) {
 		w.Q.R.HSet(ctx, scanKey(id), "last_error", err.Error())
 		log.Error("scan attempt failed", "attempt", attempts, "err", err)
 	default:
-		w.finish(ctx, m, id, map[string]any{"status": string(StatusDone), "report": report})
+		fields := map[string]any{"status": string(StatusDone)}
+		if report != nil {
+			fields["report"] = report
+		}
+		w.finish(ctx, m, id, fields)
 		log.Info("scan done", "attempt", attempts, "ms", time.Since(start).Milliseconds())
 	}
 }
 
-func (w *Worker) safeHandle(ctx context.Context, raw []byte) (out []byte, err error) {
+func (w *Worker) safeHandle(ctx context.Context, job Job) (out []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	return w.Handle(ctx, raw)
+	return w.Handle(ctx, job)
 }
 
 // finish stores the outcome, drops the raw message and acknowledges the

@@ -78,8 +78,8 @@ func pending(t *testing.T, q *Queue) int64 {
 	return p.Count
 }
 
-func echo(_ context.Context, raw []byte) ([]byte, error) {
-	return []byte(fmt.Sprintf(`{"len":%d}`, len(raw))), nil
+func echo(_ context.Context, job Job) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"len":%d}`, len(job.Raw))), nil
 }
 
 func TestEnqueueIsIdempotent(t *testing.T) {
@@ -130,11 +130,11 @@ func TestWorkerStoresResultThenAcks(t *testing.T) {
 func TestTransientErrorStaysPendingThenRetries(t *testing.T) {
 	q, _ := newQueue(t)
 	var calls atomic.Int32
-	start(t, fastWorker(q, func(ctx context.Context, raw []byte) ([]byte, error) {
+	start(t, fastWorker(q, func(ctx context.Context, job Job) ([]byte, error) {
 		if calls.Add(1) == 1 {
 			return nil, errors.New("disk on fire")
 		}
-		return echo(ctx, raw)
+		return echo(ctx, job)
 	}))
 	id, _, _ := q.Enqueue(context.Background(), []byte("retry me"))
 	s := waitStatus(t, q, id, StatusDone)
@@ -168,7 +168,7 @@ func TestWatchdogReclaimsFromDeadConsumer(t *testing.T) {
 func TestPoisonMessageIsDeadLettered(t *testing.T) {
 	q, mr := newQueue(t)
 	var calls atomic.Int32
-	start(t, fastWorker(q, func(context.Context, []byte) ([]byte, error) {
+	start(t, fastWorker(q, func(context.Context, Job) ([]byte, error) {
 		calls.Add(1)
 		panic("parser bug")
 	}))
@@ -196,7 +196,7 @@ func TestPoisonMessageIsDeadLettered(t *testing.T) {
 func TestPermanentErrorFailsWithoutRetry(t *testing.T) {
 	q, _ := newQueue(t)
 	var calls atomic.Int32
-	start(t, fastWorker(q, func(context.Context, []byte) ([]byte, error) {
+	start(t, fastWorker(q, func(context.Context, Job) ([]byte, error) {
 		calls.Add(1)
 		return nil, Permanent(errors.New("not an email"))
 	}))
@@ -227,10 +227,10 @@ func TestMissingRawIsDeadLettered(t *testing.T) {
 func TestGracefulShutdownFinishesInFlight(t *testing.T) {
 	q, _ := newQueue(t)
 	started, release := make(chan struct{}), make(chan struct{})
-	w := fastWorker(q, func(ctx context.Context, raw []byte) ([]byte, error) {
+	w := fastWorker(q, func(ctx context.Context, job Job) ([]byte, error) {
 		close(started)
 		<-release
-		return echo(ctx, raw)
+		return echo(ctx, job)
 	})
 	w.Concurrency = 1
 	stop := start(t, w)
@@ -248,6 +248,24 @@ func TestGracefulShutdownFinishesInFlight(t *testing.T) {
 	<-stopped
 	if s, _ := q.Get(context.Background(), id); s.Status != StatusDone || pending(t, q) != 0 {
 		t.Fatalf("in-flight scan not finished: %+v", s)
+	}
+}
+
+func TestJobCarriesIDAndReceivedAt(t *testing.T) {
+	q, _ := newQueue(t)
+	before := time.Now().Truncate(time.Millisecond)
+	got := make(chan Job, 1)
+	start(t, fastWorker(q, func(_ context.Context, job Job) ([]byte, error) {
+		got <- job
+		return nil, nil // result persisted elsewhere: nothing kept in Redis
+	}))
+	id, _, _ := q.Enqueue(context.Background(), []byte("job"))
+	job := <-got
+	if job.ID != id || string(job.Raw) != "job" || job.ReceivedAt.Before(before) || time.Since(job.ReceivedAt) > time.Second {
+		t.Fatalf("job %+v", job)
+	}
+	if s := waitStatus(t, q, id, StatusDone); s.Report != nil {
+		t.Fatalf("report kept in Redis although the handler returned none: %s", s.Report)
 	}
 }
 

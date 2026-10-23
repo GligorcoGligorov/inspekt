@@ -2,7 +2,8 @@
 //
 // With a Queue configured, POST /v1/scans only stores and queues the
 // message (202 Accepted) and workers analyse it; GET /v1/scans/{id} returns
-// the result. Without one (local development, tests), POST analyses
+// the result from the Store (MariaDB), or the queue state while it is
+// still pending or if it failed. Without one (local development, tests), POST analyses
 // synchronously and returns the report directly.
 package api
 
@@ -19,6 +20,7 @@ import (
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
+	"github.com/GligorcoGligorov/inspekt/internal/store"
 )
 
 // Server holds dependencies for the HTTP handlers.
@@ -28,6 +30,8 @@ type Server struct {
 	Log    *slog.Logger
 	// Queue, when set, switches POST /v1/scans to asynchronous mode.
 	Queue *queue.Queue
+	// Store, when set, is where finished results are read from.
+	Store store.Store
 
 	m metrics
 }
@@ -128,6 +132,19 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be 64 hex characters"})
 		return
 	}
+	if s.Store != nil {
+		rec, err := s.Store.Get(r.Context(), id)
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, scanResponse{ID: id, Status: queue.StatusDone,
+				ReceivedAt: &rec.ReceivedAt, ScannedAt: &rec.ScannedAt, Report: rec.Report})
+			return
+		case !errors.Is(err, store.ErrNotFound):
+			s.Log.Error("store get", "id", id, "err", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store unavailable"})
+			return
+		}
+	}
 	scan, err := s.Queue.Get(r.Context(), id)
 	switch {
 	case errors.Is(err, queue.ErrNotFound):
@@ -136,14 +153,32 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.Log.Error("get scan", "id", id, "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "queue unavailable"})
 	default:
-		writeJSON(w, http.StatusOK, scan)
+		writeJSON(w, http.StatusOK, scanResponse{ID: id, Status: scan.Status,
+			Attempts: scan.Attempts, Error: scan.Error, Report: scan.Report})
 	}
+}
+
+// scanResponse is the GET /v1/scans/{id} body, whichever store answered.
+type scanResponse struct {
+	ID         string          `json:"id"`
+	Status     queue.Status    `json:"status"`
+	Attempts   int             `json:"attempts,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	ReceivedAt *time.Time      `json:"received_at,omitempty"`
+	ScannedAt  *time.Time      `json:"scanned_at,omitempty"`
+	Report     json.RawMessage `json:"report,omitempty"`
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	if s.Queue != nil {
 		if err := s.Queue.R.Ping(r.Context()).Err(); err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "redis: " + err.Error()})
+			return
+		}
+	}
+	if s.Store != nil {
+		if err := s.Store.Ping(r.Context()); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store: " + err.Error()})
 			return
 		}
 	}
