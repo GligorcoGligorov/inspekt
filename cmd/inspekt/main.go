@@ -44,7 +44,14 @@ func main() {
 	os.Exit(exit)
 }
 
-func scan(eng *analyze.Engine, name string, asJSON bool, w io.Writer) error {
+func scan(eng *analyze.Engine, name string, asJSON bool, w io.Writer) (err error) {
+	// One hostile message must not take down a batch of thousands: report
+	// the panic as this file's error and carry on with the next.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
 	var r io.Reader = os.Stdin
 	if name != "-" {
 		f, err := os.Open(name)

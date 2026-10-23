@@ -29,6 +29,8 @@ jobs:
       - run: go test -race -coverprofile=cover.out ./...
       - name: short fuzz of the MIME parser
         run: go test ./internal/email -run='^$' -fuzz=FuzzParse -fuzztime=30s
+      - name: short fuzz of HTML link extraction
+        run: go test ./internal/extract -run='^$' -fuzz=FuzzLinks -fuzztime=30s
 
   detection-quality:
     # Fails the build if a rule change makes detection worse.

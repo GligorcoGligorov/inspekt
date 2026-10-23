@@ -49,3 +49,34 @@ func TestLinksCap(t *testing.T) {
 		t.Fatalf("cap not enforced: %d", n)
 	}
 }
+
+// Regression: strings.ToLower changes the byte length of invalid UTF-8 and
+// of some letters, which shifted offsets and panicked (56 messages in the
+// Nazario phishing corpus).
+func TestHTMLLinksNonASCIIDoesNotShiftOffsets(t *testing.T) {
+	for _, doc := range []string{
+		"\xff\xfe<a href=\"https://a.example/\">x</a>",
+		"İİİİ<A HREF=\"https://b.example/\">click</A>",
+		"<a href=\"https://c.example/\">\xc3</a",
+	} {
+		links := htmlLinks(doc)
+		if len(links) != 1 {
+			t.Errorf("%q: got %+v", doc, links)
+		}
+	}
+}
+
+// FuzzLinks: link extraction must never panic, whatever the HTML.
+func FuzzLinks(f *testing.F) {
+	for _, seed := range []string{
+		`<a href="https://x.example/">t</a>`,
+		"\xff<A HREF=x>İ</a",
+		`<form action='https://y.example'><a href=`,
+		"<<<>>><a",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, doc string) {
+		Links(&email.Message{HTMLBody: doc, TextBody: doc})
+	})
+}

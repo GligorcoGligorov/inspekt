@@ -93,7 +93,7 @@ func newLink(raw, text string, src Source) (Link, bool) {
 // htmlLinks scans for <a href>, <area href> and <form action>.
 func htmlLinks(doc string) []Link {
 	var out []Link
-	lower := strings.ToLower(doc)
+	lower := asciiLower(doc) // offsets in lower must be valid in doc
 	i := 0
 	for i < len(doc) && len(out) < MaxLinks {
 		lt := strings.IndexByte(lower[i:], '<')
@@ -134,6 +134,21 @@ func htmlLinks(doc string) []Link {
 		}
 	}
 	return out
+}
+
+// asciiLower lower-cases ASCII letters only, so every byte offset in the
+// result is the same offset in s. strings.ToLower does not guarantee that:
+// invalid UTF-8 becomes U+FFFD (3 bytes) and some letters change length
+// ("İ" is 2 bytes, its lower case 3), which once made htmlLinks slice past
+// the end of hostile HTML and panic. Tag and attribute names are ASCII.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // splitTag returns the lower-cased tag name and its attributes.
