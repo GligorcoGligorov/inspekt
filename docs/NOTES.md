@@ -142,3 +142,90 @@ evaluating old corpora.
    attacker who can slow our DNS could cause that on purpose. There is a
    test for exactly this case. I would also add a metric for temperrors so
    an outage is visible on a dashboard.
+
+---
+
+## Step 3: The async pipeline (Redis Streams)
+
+### The idea
+
+Before, the API analysed each email while the client waited. That breaks
+under load: a burst of 1,000 emails means 1,000 slow requests, and if the
+server restarts, those emails are gone. Now the API only **stores and
+queues** the email and answers right away (`202 Accepted` + an id). Separate
+**worker** processes take emails from the queue and analyse them. The client
+asks for the result later with `GET /v1/scans/{id}`.
+
+### The pieces
+
+- **Redis Stream `scans`**: an append-only log of "please scan id X".
+  The raw email itself sits in a separate key (`scan:raw:{id}`, 24 h TTL).
+- **Consumer group `workers`**: Redis gives each entry to exactly one
+  worker and remembers which entries were handed out but not yet finished
+  (the **pending list**). This is what a plain Redis list cannot do.
+- **id = SHA-256 of the email**, so sending the same email twice gives the
+  same id and only one scan (**idempotency**).
+- **XACK only after the result is saved**, in the same transaction. If a
+  worker crashes halfway, the entry is still pending, nothing is lost
+  (**at-least-once delivery**).
+- **Watchdog**: every 30 s it looks for entries pending longer than 60 s
+  (their worker probably died) and takes them over with `XAUTOCLAIM`.
+- **Dead-letter stream `scans:dead`**: every attempt is counted. After 3
+  failed attempts the entry moves there with the reason, so one "poison"
+  email (say, one that makes the parser panic) cannot loop forever. An email
+  that simply is not an email fails at once: retrying cannot fix it.
+- **Graceful shutdown**: on SIGTERM a worker stops taking new work but
+  finishes and saves what it is doing.
+
+### The maxmemory bug we found (and why it matters)
+
+Redis runs with `maxmemory 64mb` and `noeviction`: when full, it should
+refuse new writes, and the API turns that into `503 Retry-After`, so clients
+slow down instead of us losing data. Testing it by hand showed Redis
+happily storing 16 MB with a 2 MB limit.
+
+The cause: the enqueue was a **Lua script**, and Redis 7 does not apply the
+memory check to scripts without flags. The fix uses `WATCH` + `MULTI/EXEC`
+(an optimistic transaction) instead: every write inside it is a normal
+command that Redis memory-checks, and if one is refused the whole
+transaction is aborted. It is still atomic, and the end-to-end test now
+fills Redis on purpose and expects `503` with `Retry-After`.
+
+Lesson: a config setting is a claim until a test proves it.
+
+### How it is tested
+
+- Unit tests use **miniredis** (an in-memory fake Redis): crash recovery,
+  retries, dead-lettering, idempotency and graceful shutdown run in about
+  two seconds, with no Docker.
+- `make e2e` (also a CI job) starts the real stack with docker compose and
+  checks the real thing: real Redis, real worker, a Redis restart, and the
+  full-memory case above.
+
+### Interview questions
+
+1. **"Why Redis Streams and not a Redis list or RabbitMQ?"**
+   With a list (`LPUSH`/`BRPOP`), an item is removed when a worker takes it.
+   If that worker crashes, the email is lost. Streams with a consumer group
+   keep a pending list of unacknowledged entries, support several
+   independent consumer groups, and keep history for replay. RabbitMQ would
+   also work (acks, dead-letter exchanges), but it is one more system to run
+   and monitor. At this volume Redis is enough, and we already need it for
+   the result cache. Past roughly that point, I would look at RabbitMQ or Kafka.
+
+2. **"Your worker crashes after saving the result but before XACK. What
+   happens?"**
+   That window cannot happen here: the save and the XACK are in one
+   `MULTI/EXEC` transaction, so both happen or neither does. In general,
+   with at-least-once delivery you must assume an entry can be processed
+   twice, so processing must be **idempotent**. Here it is: the id is the
+   hash of the email, and re-analysing the same email gives the same result
+   and overwrites the same key.
+
+3. **"What happens when Redis is full?"**
+   It refuses writes (`noeviction`), and the API answers `503` with
+   `Retry-After`, which is backpressure: the client retries later and
+   nothing already queued is evicted. Eviction policies like `allkeys-lru`
+   would silently delete queued emails. Then I would tell the story of the
+   Lua-script bug above: the setting looked right, but only a test that
+   fills Redis on purpose showed it was not enforced.

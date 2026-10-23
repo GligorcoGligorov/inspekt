@@ -29,8 +29,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: eval-report, path: eval/out/ }
 
-  docker:
+  e2e:
+    # Real Redis + worker via docker compose: async scans, idempotency,
+    # recovery after a worker stop and a Redis restart.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t inspekt-api .
+      - run: make e2e

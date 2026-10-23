@@ -31,12 +31,56 @@ testdata/phish_lookalike.eml
 make test          # Go + Python tests
 make scan          # scan the sample messages
 make eval-sample   # precision / recall on the sample corpus
-make run           # HTTP API on :8080
+make run           # HTTP API on :8080, scans analysed inline (no Redis needed)
 curl --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
-docker compose up --build
+make e2e           # full stack in Docker + end-to-end checks
+```
+
+With the full stack (`docker compose up --build`: API, Redis, worker), a scan
+is queued and fetched by id:
+
+```bash
+$ curl -si --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
+HTTP/1.1 202 Accepted
+Location: /v1/scans/8f3c…
+{"id":"8f3c…","status":"queued"}
+
+$ curl -s localhost:8080/v1/scans/8f3c… | jq '.status, .report.verdict'
+"done"
+"malicious"
 ```
 
 ## Architecture
+
+### Pipeline
+
+```mermaid
+flowchart LR
+  C[client] -- "POST /v1/scans" --> API[inspekt-api]
+  API -- "202 + id<br/>(id = SHA-256 of message)" --> C
+  API -- "WATCH/MULTI: raw + status + XADD" --> S[(Redis Stream<br/>scans)]
+  S -- "XREADGROUP<br/>consumer group" --> W[inspekt-worker<br/>N goroutines]
+  W -- "store result + XACK<br/>in one MULTI" --> H[(scan:id hash)]
+  C -- "GET /v1/scans/id" --> API
+  API --> H
+  WD[watchdog<br/>XAUTOCLAIM idle > 60 s] -.-> S
+  W -- "after 3 attempts" --> D[(scans:dead)]
+```
+
+- **Idempotent:** the same message posted twice is one scan.
+- **At-least-once:** the entry is acknowledged in the same transaction that
+  stores the result. A worker that dies mid-scan leaves the entry pending;
+  the watchdog hands it to a live worker after 60 s.
+- **Poison messages** (e.g. a parser panic) are dead-lettered with the
+  reason after 3 attempts; unparseable input fails at once without retries.
+- **Backpressure:** Redis runs with `maxmemory 64mb` and `noeviction`; when
+  full, the API answers `503` with `Retry-After` instead of losing queued scans.
+- **Graceful shutdown:** on SIGTERM the worker stops reading and finishes and
+  acknowledges what it is analysing.
+- `/readyz` checks Redis; `/metrics` adds queue lag, pending and dead-letter
+  counts.
+
+### Analysis
 
 ```mermaid
 flowchart LR
@@ -54,7 +98,9 @@ flowchart LR
 | `internal/extract` | Links with visible anchor text, form actions |
 | `internal/analyze` | Independent checks, signal merging, scoring, verdict |
 | `internal/auth` | Native SPF / DKIM / DMARC verification behind an injectable DNS `Resolver` |
-| `internal/api` | HTTP API, Prometheus-format metrics |
+| `internal/api` | HTTP API (async with a queue, inline without), Prometheus-format metrics |
+| `internal/queue` | Redis Streams producer, worker pool, watchdog, dead-letter queue |
+| `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
 | `eval/` | Precision / recall / FPR, false-positive drivers, CI quality gate |
 
 ## Design decisions
@@ -102,6 +148,14 @@ message, or failing to parse a sample fails CI.
 - `verify` mode takes the client IP and HELO name from the **topmost**
   `Received` header and assumes our own MTA wrote it. Deploy Inspekt directly
   behind that MTA; headers further down can be forged and are never read.
+- Scan results live in Redis for 24 h (MariaDB storage is step 5). Every
+  worker restart leaves an idle consumer name in the group; harmless, but
+  not cleaned up yet.
+- A transiently failed scan is retried only when the watchdog reclaims it,
+  so a retry takes about 60 s.
+- Redis checks `maxmemory` before each write, so one write can overshoot it
+  by up to a full message (25 MiB). The Redis container's memory limit
+  (160 MiB) leaves room for that.
 - DMARC `pct=` is ignored and the policy is reported, not enforced.
 - `dmarc_fail` scores 35 regardless of the domain's policy. A domain with
   `p=none` (gmail.com, for one) has not asked receivers to act on failures,

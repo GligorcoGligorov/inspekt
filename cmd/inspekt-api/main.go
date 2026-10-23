@@ -1,48 +1,52 @@
 // Command inspekt-api serves the scanner over HTTP.
 //
 //	curl --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
+//
+// With INSPEKT_REDIS_ADDR set, scans are queued for inspekt-worker and the
+// POST returns 202 with the scan id; without it, they are analysed inline.
 package main
 
 import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/api"
-	"github.com/GligorcoGligorov/inspekt/internal/auth"
+	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/queue"
 )
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	cfg := analyze.DefaultConfig
-	if ids := os.Getenv("INSPEKT_TRUSTED_AUTHSERV_IDS"); ids != "" {
-		cfg.TrustedAuthServIDs = strings.Split(ids, ",")
-	}
-	switch mode := envOr("INSPEKT_AUTH_MODE", "headers"); mode {
-	case "headers":
-	case "verify":
-		cfg.Verifier = &auth.Verifier{Resolver: net.DefaultResolver}
-	default:
-		log.Error("INSPEKT_AUTH_MODE must be headers or verify", "got", mode)
+	cfg, err := config.Engine()
+	if err != nil {
+		log.Error("config", "err", err)
 		os.Exit(2)
+	}
+	var q *queue.Queue
+	if addr := config.Env("INSPEKT_REDIS_ADDR", ""); addr != "" {
+		rdb := redis.NewClient(&redis.Options{Addr: addr})
+		defer rdb.Close()
+		q = &queue.Queue{R: rdb}
 	}
 
 	srv := &http.Server{
-		Addr: envOr("INSPEKT_ADDR", ":8080"),
+		Addr: config.Env("INSPEKT_ADDR", ":8080"),
 		Handler: (&api.Server{
 			Engine: analyze.New(cfg),
 			Limits: email.DefaultLimits,
 			Log:    log,
+			Queue:  q,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -61,16 +65,10 @@ func main() {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	log.Info("listening", "addr", srv.Addr, "engine", analyze.Version, "auth_mode", envOr("INSPEKT_AUTH_MODE", "headers"))
+	log.Info("listening", "addr", srv.Addr, "engine", analyze.Version,
+		"auth_mode", config.AuthMode(), "async", q != nil)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server", "err", err)
 		os.Exit(1)
 	}
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }

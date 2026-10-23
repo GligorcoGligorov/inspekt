@@ -9,6 +9,7 @@
 package analyze
 
 import (
+	"bytes"
 	"sort"
 	"strings"
 	"time"
@@ -165,6 +166,21 @@ func (e *Engine) Analyze(msg *email.Message) *Report {
 		DurationsMS: durations,
 		Engine:      Version,
 	}
+}
+
+// ScanRaw parses raw and analyses it. A parse that fails outright returns
+// the error; a partial parse (a limit hit after the headers) is analysed
+// with the error recorded as a warning, since what was read is still
+// useful to the analyst.
+func (e *Engine) ScanRaw(raw []byte, lim email.Limits) (*Report, error) {
+	msg, err := email.Parse(bytes.NewReader(raw), lim)
+	if msg == nil {
+		return nil, err
+	}
+	if err != nil {
+		msg.Warnings = append(msg.Warnings, err.Error())
+	}
+	return e.Analyze(msg), nil
 }
 
 func (e *Engine) verdict(score int) Verdict {

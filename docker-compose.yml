@@ -1,14 +1,61 @@
-# Step 0: API only.  Step 3 adds redis + worker, step 5 mariadb,
+# Step 3: API + Redis Streams + worker. Step 5 adds mariadb,
 # step 7 prometheus + grafana (see docs/WEEKEND_PLAN.md).
+x-inspekt: &inspekt
+  build: .
+  image: inspekt:local
+  read_only: true
+  restart: unless-stopped
+  depends_on:
+    redis: { condition: service_healthy }
+
 services:
+  redis:
+    image: redis:7.4-alpine
+    # noeviction: when full, Redis refuses new writes (the API answers 503)
+    # instead of silently evicting queued scans. AOF keeps the queue across
+    # a Redis restart.
+    command: >
+      redis-server --maxmemory 64mb --maxmemory-policy noeviction
+      --appendonly yes --save ""
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    # maxmemory is checked before each write, so one write may overshoot it
+    # by up to a full message (25 MiB, plus the same again in the client
+    # buffer). The container limit leaves room for that.
+    deploy:
+      resources:
+        limits: { memory: 160m }
+
   api:
-    build: .
+    <<: *inspekt
+    command: ["/inspekt-api"]
     ports: ["8080:8080"]
     environment:
       INSPEKT_ADDR: ":8080"
+      INSPEKT_REDIS_ADDR: "redis:6379"
       INSPEKT_TRUSTED_AUTHSERV_IDS: ""   # e.g. mx.yourcompany.com in production
       INSPEKT_AUTH_MODE: headers         # verify = own SPF/DKIM/DMARC via DNS
-    read_only: true
     deploy:
       resources:
         limits: { memory: 256m }   # keep the 8 GB MacBook happy
+
+  worker:
+    <<: *inspekt
+    command: ["/inspekt-worker"]
+    environment:
+      INSPEKT_REDIS_ADDR: "redis:6379"
+      INSPEKT_WORKERS: "4"
+      INSPEKT_TRUSTED_AUTHSERV_IDS: ""
+      INSPEKT_AUTH_MODE: headers
+    # docker stop sends SIGTERM; give in-flight scans time to finish.
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 256m }
+
+volumes:
+  redis-data:

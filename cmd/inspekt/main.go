@@ -12,11 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
-	"github.com/GligorcoGligorov/inspekt/internal/auth"
+	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 )
 
@@ -29,13 +28,9 @@ func main() {
 	asJSON := fs.Bool("json", false, "print one JSON report per line")
 	_ = fs.Parse(os.Args[2:])
 
-	cfg := analyze.DefaultConfig
-	switch mode := os.Getenv("INSPEKT_AUTH_MODE"); mode {
-	case "", "headers":
-	case "verify":
-		cfg.Verifier = &auth.Verifier{Resolver: net.DefaultResolver}
-	default:
-		fmt.Fprintf(os.Stderr, "INSPEKT_AUTH_MODE must be headers or verify, got %q\n", mode)
+	cfg, err := config.Engine()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	eng := analyze.New(cfg)
