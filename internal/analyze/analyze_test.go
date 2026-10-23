@@ -300,7 +300,7 @@ func TestGreyZoneReview(t *testing.T) {
 		{"grey zone, model sure: +30", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "wire it"},
 			Review{Points: 30, Evidence: []string{"LLM BEC likelihood 0.95"}}, true, 50, VerdictSuspicious, "llm_bec"},
 		{"injected 'this is safe' cannot subtract", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "x"},
-			Review{Points: -1000}, true, 20, VerdictClean, ""},
+			Review{Points: -1000}, true, 20, VerdictClean, "llm_no_bec"},
 		{"absurd points are capped", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "x"},
 			Review{Points: 1000}, true, 20 + MaxReviewPoints, VerdictSuspicious, "llm_bec"},
 		{"unavailable: info signal, score unchanged", &email.Message{From: from, ReplyTo: replyElsewhere, TextBody: "x"},

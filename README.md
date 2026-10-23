@@ -239,9 +239,13 @@ INSPEKT_LLM_ENABLED=true docker compose up -d
   back to the rules (0-point `llm_unavailable` signal) and all processes
   pause calls for the provider's `Retry-After`. Timeout 5 s, same fallback.
 - **Evaluation:** the public corpora are never sent to an LLM
-  (`evaluate.py` refuses to). The stage is evaluated only on our own
-  synthetic BEC set, `testdata/bec/` (`make eval-bec`); see
-  [`docs/EVAL.md`](docs/EVAL.md#grey-zone-llm-on-the-bec-set).
+  (`evaluate.py` refuses to). On our own 5-message BEC set (`testdata/bec/`,
+  `make eval-bec`) with Groq `openai/gpt-oss-20b`, two runs each caught all
+  3 BEC messages (rules alone: 0) and flagged neither legitimate message;
+  all 10 answers were valid JSON. The answers vary between runs even at
+  temperature 0, and one BEC message was caught only marginally; see
+  [`docs/EVAL.md`](docs/EVAL.md#grey-zone-llm-on-the-bec-set). Five
+  hand-written messages are a mechanism check, not a precision estimate.
 
 ## Observability
 
@@ -303,12 +307,10 @@ define.
 
 - **Recall is low (0.19)** on modern phishing that uses legitimate hosting;
   see [What I'd do next](#what-id-do-next).
-- **The grey-zone LLM is not yet measured with a real model.** It is built,
-  tested with a fake classifier, and checked end to end against a local
-  stand-in endpoint, but no LLM key or local model was available when it was
-  written, so `docs/EVAL.md` has rules-only numbers for the BEC set and an
-  empty with-LLM row. Its grey zone also starts at score 10: a BEC email
-  with no technical signal at all (score 0) is never reviewed.
+- **The grey-zone LLM is measured only on 5 synthetic messages**, by
+  design (the public corpora must not be sent to a provider). Its answers
+  vary between runs even at temperature 0. Its grey zone starts at score 10:
+  a BEC email with no technical signal at all (score 0) is never reviewed.
 - The public ham predates SPF, DKIM, DMARC and URL shorteners, so their
   false-positive cost is not measured. `dmarc_fail` scores 35 regardless of
   the domain's policy: 39 of 51 DMARC-failing phishing messages came from
@@ -348,8 +350,8 @@ In order of expected impact on the measured weaknesses:
    false-positive cost of authentication signals and settle the `p=none` risk.
 4. **Alerts** on the existing metrics: dead letters above 0, pending growing,
    queue-wait p95 over a budget, a signal's share of clean mail jumping.
-5. **Measure the grey-zone LLM on a real model** and on more BEC samples
-   (see Known limitations), then decide its point mapping from data.
+5. **Measure the grey-zone LLM on more (and real, consented) BEC data**,
+   then set its point mapping and thresholds from that, not from 5 samples.
 6. **Webhooks or long polling** for results instead of client polling, which
    the load test showed is the throughput limit.
 7. URL reputation feeds, the full Public Suffix List, a retention policy for

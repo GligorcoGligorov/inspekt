@@ -249,28 +249,61 @@ with no attachments, so all would be reviewed:
 | `bec/legit_ceo_meeting.eml` | ham | the real CEO moving a meeting; replies go to his office |
 | `bec/legit_invoice_reminder.eml` | ham | a real invoice reminder; "details have not changed" |
 
-| Run | Command | Precision | Recall | FPR | TP / FP / TN / FN |
-|---|---|---|---|---|---|
-| Rules only (`inspekt-rules/0.2.0`) | `make eval-bec` | 0.0 | 0.0 | 0.0 | 0 / 0 / 2 / 3 |
-| Rules + LLM | `INSPEKT_LLM_BASE_URL=… INSPEKT_LLM_MODEL=… INSPEKT_LLM_API_KEY=… make eval-bec` | not measured | not measured | not measured | — |
+| Run | Model | Date (UTC) | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|---|---|
+| Rules only | none (`inspekt-rules/0.2.0`) | 2026-10-23 | 0.0 | 0.0 | 0.0 | 0 / 0 / 2 / 3 |
+| Rules + LLM, run 1 | Groq `openai/gpt-oss-20b` | 2026-10-23 18:45 | 1.0 | 1.0 | 0.0 | 3 / 0 / 2 / 0 |
+| Rules + LLM, run 2 | Groq `openai/gpt-oss-20b` | 2026-10-23 18:46 | 1.0 | 1.0 | 0.0 | 3 / 0 / 2 / 0 |
 
-**Why the second row is empty:** no LLM API key or local model was
-available when this stage was built, and filling the row with a fake
-classifier's output would be invented data. The stage is covered by tests
-with a fake classifier (gating, clamping, timeouts, the daily and
-per-minute caps, 429 handling, data minimisation, prompt-injection
-delimiting) and was checked end to end with the real binary against a local
-stand-in endpoint (plumbing only: request shape, masking, signal, 429
-pause). Run the command above with a real model to fill the row; the
-summary records which model was used (`llm_review`).
+Command: `set -a; source .env; set +a; INSPEKT_LLM_ENABLED=true
+INSPEKT_LLM_PER_MINUTE=10 make eval-bec`. The per-minute cap was raised from
+the default 4 for these runs only, because one CLI process reviews all 5
+messages within seconds (5 calls, roughly 6K tokens, well inside Groq's
+per-minute limits for this model). Prompt, temperature (0), `max_tokens`
+(400) and point mapping are the shipped defaults; nothing was tuned to
+these samples.
 
-What to look for when it is run: all 3 BEC messages above 30 points
-(`llm_bec` +30 needs likelihood ≥ 0.8), and **neither legitimate message
-flagged** (the gate is `--max-fpr 0`). The legitimate ones are written to
-be hard: a CEO email with a Reply-To elsewhere, and an invoice email about
-payment.
+Per message (likelihood as returned by the model, then the resulting
+verdict and score):
 
-Known limits of the stage: its grey zone starts at score 10, so BEC with no
+| Message | Label | Rules only | Run 1 | Run 2 |
+|---|---|---|---|---|
+| `bec_reply_to.eml` | phish | clean, 20 | 0.70 → suspicious, 35 | 0.60 → suspicious, 35 |
+| `bec_gift_cards.eml` | phish | clean, 20 | 0.90 → suspicious, 50 | 0.95 → suspicious, 50 |
+| `bec_vendor_bank_change.eml` | phish | clean, 20 | 0.90 → suspicious, 50 | 0.80 → suspicious, 50 |
+| `legit_ceo_meeting.eml` | ham | clean, 20 | 0.05 → clean, 20 | 0.05 → clean, 20 |
+| `legit_invoice_reminder.eml` | ham | clean, 25 | 0.05 → clean, 25 | 0.05 → clean, 25 |
+
+**JSON validity:** all 10 answers were valid JSON with a number in range:
+no `llm_unavailable` signal, nothing truncated. The reasoning model's
+answers fit in `max_tokens` 400, so no reasoning-effort or token-limit
+change was needed. The model's reasons were on topic (e.g. "Changed bank
+details; No verification or confirmation", "No financial request; No
+urgency or secrecy").
+
+**What to take from it, and what not:**
+
+- On these 5 hand-written messages the stage does what it is for: all 3 BEC
+  messages move from clean to suspicious, neither legitimate message is
+  flagged, and the model gave both legitimate messages 0.05.
+- **Answers vary between runs even at temperature 0.** `bec_reply_to.eml`
+  got 0.80 in a preliminary run, then 0.70, then 0.60, and 0.60 is exactly
+  the +15 threshold: its 35 points clear the verdict line by 5. It was caught
+  every time, but marginally; a slightly lower answer would leave it clean.
+  `bec_vendor_bank_change.eml` moved from 0.90 to 0.80, the edge of +30.
+- 5 messages, written by the same person who wrote the prompt, say nothing
+  reliable about precision or recall in production.
+
+History: a first attempt with `llama-3.3-70b-versatile` returned HTTP 404
+("does not exist or you do not have access to it") for every call; the
+fallback worked (all 5 scans completed on the rules with `llm_unavailable`).
+A preliminary run with `openai/gpt-oss-20b` at 18:44 gave the same
+verdicts (likelihoods 0.80 / 0.90 / 0.90 for the BEC messages); it did not
+yet record 0-point reviews, which is why the two runs above were made after
+adding the `llm_no_bec` info signal (a review that finds no BEC is now
+visible to the analyst, still worth 0 points).
+
+Known limits of the stage: answers vary from run to run (above); its grey zone starts at score 10, so BEC with no
 technical signal at all is never reviewed; names, company names and
 amounts are sent unmasked; the points mapping (≥ 0.8 → +30, ≥ 0.6 → +15) is a
 starting point to be set from data once real runs exist.

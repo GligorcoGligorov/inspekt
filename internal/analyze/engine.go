@@ -215,6 +215,11 @@ func (e *Engine) Analyze(msg *email.Message) *Report {
 				Evidence: rv.Evidence})
 			sort.SliceStable(signals, func(i, j int) bool { return signals[i].Score > signals[j].Score })
 			score = total(signals)
+		default:
+			// Reviewed and judged not BEC: worth 0 points, but the analyst
+			// should still see that a second opinion was asked for and what it was.
+			signals = append(signals, Signal{ID: "llm_no_bec", Check: "review", Severity: SevInfo, Score: 0,
+				Evidence: rv.Evidence})
 		}
 	}
 

@@ -690,13 +690,17 @@ set a shared pause in Redis for the `Retry-After` the provider sent. A test
 checks that after one 429, five more reviews from another process make zero
 requests.
 
-### Honest status
+### Measured (on 5 of our own messages)
 
-Built and tested, but **not measured with a real model**. No key was
-available, and reporting a fake model's numbers would be invented data.
-EVAL.md has the rules-only row (0 of 3 BEC caught) and the exact command
-to fill the with-LLM row. The public corpora are never sent to an LLM;
-the eval script refuses.
+With Groq `openai/gpt-oss-20b`, two runs: all 3 BEC messages went from
+clean to suspicious, both legitimate ones stayed clean (the model said
+0.05 for both), and all 10 answers were valid JSON. Two honest caveats.
+First, the answers **change between runs even at temperature 0**: one BEC
+message scored 0.80, 0.70, then 0.60, right on the threshold. Second, 5
+messages written by the same person who wrote the prompt prove the
+mechanism, not the accuracy. The first model tried (`llama-3.3-70b-versatile`)
+no longer exists on Groq; every call got a 404, and every scan still
+finished on the rules. That is the fallback doing its job.
 
 ### Interview questions
 
