@@ -77,6 +77,8 @@ def main() -> int:
     ap.add_argument("--positive-at", default="suspicious", choices=["suspicious", "malicious"])
     ap.add_argument("--min-recall", type=float, default=0.0)
     ap.add_argument("--max-fpr", type=float, default=1.0)
+    ap.add_argument("--max-parse-errors", type=int, default=-1,
+                    help="fail if more messages than this are rejected by the parser (-1: no limit)")
     ap.add_argument("--limit", type=int, default=0, help="evaluate only the first N messages")
     ap.add_argument("--out", help="write <out>.json and <out>.md")
     args = ap.parse_args()
@@ -129,6 +131,10 @@ def main() -> int:
         failed.append(f"recall {cm.recall:.3f} < {args.min_recall}")
     if cm.fpr > args.max_fpr:
         failed.append(f"false-positive rate {cm.fpr:.3f} > {args.max_fpr}")
+    # A message the parser rejects drops out of the confusion matrix, which
+    # would quietly inflate recall; on a curated corpus that must fail.
+    if 0 <= args.max_parse_errors < len(errors):
+        failed.append(f"parse errors {len(errors)} > {args.max_parse_errors}")
     if failed:
         print("QUALITY GATE FAILED: " + "; ".join(failed), file=sys.stderr)
         return 1

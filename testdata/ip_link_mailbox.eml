@@ -1,0 +1,14 @@
+Return-Path: <office@kovac-dental.example>
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=kovac-dental.example; dkim=pass header.d=kovac-dental.example; dmarc=pass header.from=kovac-dental.example
+From: Mail Administrator <office@kovac-dental.example>
+To: victim@example.org
+Subject: Your mailbox is full
+Date: Thu, 22 Oct 2026 16:20:00 +0000
+Message-ID: <q8x1@kovac-dental.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Your mailbox is full and incoming messages are being held.</p>
+<p><a href="http://203.0.113.45/owa/auth/logon.aspx">Release held messages</a></p>
+</body></html>

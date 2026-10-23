@@ -1,5 +1,8 @@
-file,label
-clean_newsletter.eml,ham
-phish_lookalike.eml,phish
-malware_attachment.eml,phish
-bec_reply_to.eml,phish
+file,label,note
+clean_newsletter.eml,ham,
+support_ticket_reply_to.eml,ham,helpdesk Reply-To on another domain; guards reply_to_mismatch FPs
+phish_lookalike.eml,phish,
+malware_attachment.eml,phish,
+ip_link_mailbox.eml,phish,
+bec_reply_to.eml,phish,known gap until Step 6 (grey-zone LLM); do not tune rules for it
+qr_phish.eml,phish,known gap until Step 4 (QR decoding); do not tune rules for it

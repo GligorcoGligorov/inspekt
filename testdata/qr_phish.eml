@@ -1,0 +1,30 @@
+Return-Path: <it-notices@northwind-hr.example>
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=northwind-hr.example; dkim=pass header.d=northwind-hr.example; dmarc=pass header.from=northwind-hr.example
+From: IT Service Desk <it-notices@northwind-hr.example>
+To: victim@example.org
+Subject: Action required: re-enrol multi-factor authentication
+Date: Thu, 22 Oct 2026 07:45:00 +0000
+Message-ID: <mfa-7731@northwind-hr.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="q1"
+
+--q1
+Content-Type: text/plain; charset=utf-8
+
+Your multi-factor authentication registration expires today.
+Scan the attached code with your phone camera to keep access to email.
+Do not reply to this message.
+
+--q1
+Content-Type: image/png; name="MFA-enrolment.png"
+Content-Disposition: attachment; filename="MFA-enrolment.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAMYAAADGAQMAAACzVW0eAAAABlBMVEUAAAD///+l2Z/dAAAAAnRS
+TlP//8i138cAAAAJcEhZcwAACxIAAAsSAdLdfvwAAAEKSURBVFiF7ZZLDgQhCERJOIBH8uoeyQOY
+MFCYno89u5lYC4lJ0zwXFUFQ7JvJIYf8hUhYHcV8aY8fpSHx7VVK85g7M0JCumivI8O+RSobSdVK
+SVyvYnERZDuF600d7CR5S3SqXu/PTnJZSp7GQVCAIXaUlouHeDg8D/iJmoeJSAqX4t8GpykNgdui
+81kcp77cku3EoiVn5wsnmg0NQbY91QK9SyXuJjljB/rKeGabgmgW5KxEIyLW4lBDe81hazQkDd0l
+5DvnIdc0m/P2Zs5tI/kKQHcJ/y3b28n1ssPjTrCFiqCv2NL5KMhsyZbzloYg2yhAHOpnHewkeUs8
+gDy35f7sJPd2yCG/Jw/36QcOmo78rwAAAABJRU5ErkJggg==
+--q1--

@@ -1,0 +1,34 @@
+Return-Path: <bounce-48213@mail.helpdesk-mail.example>
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=mail.helpdesk-mail.example; dkim=pass header.d=acme-tools.example; dmarc=pass header.from=acme-tools.example
+From: Acme Tools Support <support@acme-tools.example>
+Reply-To: Acme Tools Support <support+id48213@acme-tools.helpdesk-mail.example>
+To: customer@example.org
+Subject: [Request #48213] Replacement charger for order 10-2231
+Date: Thu, 22 Oct 2026 14:05:00 +0000
+Message-ID: <ticket-48213-3@acme-tools.helpdesk-mail.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="t1"
+
+--t1
+Content-Type: text/plain; charset=utf-8
+
+Hi Ana,
+
+A replacement charger for order 10-2231 shipped today. You can reply to
+this email to add a comment to request #48213.
+
+View your request: https://acme-tools.helpdesk-mail.example/requests/48213
+
+Marko, Acme Tools Support
+
+--t1
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Hi Ana,</p>
+<p>A replacement charger for order 10-2231 shipped today. You can reply to
+this email to add a comment to request #48213.</p>
+<p><a href="https://acme-tools.helpdesk-mail.example/requests/48213">View your request</a></p>
+<p>Marko, Acme Tools Support</p>
+</body></html>
+--t1--
