@@ -185,6 +185,10 @@ func (LinkCheck) Run(in *Input) []Signal {
 			out = append(out, Signal{ID: "ip_literal_url", Severity: SevMedium, Score: 25,
 				Evidence: []string{l.URL}})
 		}
+		if urlShorteners[RegistrableDomain(l.Host)] {
+			out = append(out, Signal{ID: "url_shortener", Severity: SevLow, Score: 10,
+				Evidence: []string{l.URL + " (real destination hidden)"}})
+		}
 		if l.Source == "html_form" {
 			out = append(out, Signal{ID: "html_form_in_email", Severity: SevHigh, Score: 30,
 				Evidence: []string{"form submits to " + l.Host}})
@@ -203,6 +207,12 @@ func (LinkCheck) Run(in *Input) []Signal {
 	}
 	return out
 }
+
+// urlShorteners hide where a link really goes, so the other link checks
+// cannot see the destination. Low weight: legitimate mail uses them too
+// (t.co is in every Twitter/X notification). Keys are registrable domains.
+var urlShorteners = set("bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd",
+	"buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at", "rb.gy", "t.ly", "tiny.cc", "s.id")
 
 func hostOf(u string) string {
 	u = u[strings.Index(u, "://")+3:]

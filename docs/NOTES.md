@@ -4,6 +4,57 @@ Plain-language explanations of each step, plus interview questions to practise.
 
 ---
 
+## Step 1: The `url_shortener` check
+
+### What it does
+
+A short link (`https://bit.ly/3xYzAb`) hides where it really goes. Our other
+link checks look at the destination host (lookalike domain? IP address?
+text says one site, link goes to another?), and a shortener blinds all of
+them: they only see `bit.ly`. So a short link in an email is a small
+warning sign of its own: `url_shortener`, **+10 points**.
+
+### Details worth knowing
+
+- It compares the **registrable domain** (`RegistrableDomain`), not the raw
+  host, so `www.bit.ly` matches but `notbit.ly` does not. A test checks both,
+  and fails if someone "simplifies" it to compare the raw host.
+- **Low weight on purpose.** Legitimate mail uses shorteners all the time:
+  every Twitter/X notification is full of `t.co` links. 10 points can never
+  make a verdict on its own (the threshold is 30); it only tips a message
+  that already has other signals.
+- Ten short links in one email count **once** (the engine merges signals
+  with the same ID), so a newsletter with many `bit.ly` links is not pushed
+  over the line by repetition. There is a test for that too.
+- It lives inside `LinkCheck` because it is a property of a link, like
+  `ip_literal_url`.
+
+### Interview questions
+
+1. **"Why not follow the short link to see where it goes?"**
+   That would be more accurate, but it means our scanner makes outbound
+   HTTP requests to attacker-controlled URLs: it confirms to the attacker
+   that the email was opened (many links are unique per victim), can be
+   served a harmless page while real users get the phishing page, and costs
+   time per message. If I added it, it would run in a sandboxed worker with
+   strict timeouts, no cookies, and only HEAD requests that follow
+   redirects without loading content.
+
+2. **"Why only 10 points?"**
+   Because the false-positive cost is real: legitimate senders use
+   shorteners heavily. A weight should match how much a signal separates
+   phishing from legitimate mail, and I would confirm the number with the
+   public-corpus evaluation (precision of `url_shortener` alone) rather than
+   by feel.
+
+3. **"How would you keep the shortener list up to date?"**
+   Move it from code to configuration (a file or the database) so it can
+   change without a deploy, seed it from public lists of shortener
+   domains, and log every link domain the scanner sees so new shorteners
+   show up in the data.
+
+---
+
 ## Step 2: Verifying SPF, DKIM and DMARC ourselves
 
 ### The problem

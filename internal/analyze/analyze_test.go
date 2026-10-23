@@ -9,6 +9,7 @@ import (
 	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/auth/authtest"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/extract"
 )
 
 func TestRegistrableDomain(t *testing.T) {
@@ -125,6 +126,41 @@ func TestAuthCheckVerifyDNSOutageScoresNothing(t *testing.T) {
 	}
 	if _, ok := signalByID(rep, "auth_unverified"); !ok {
 		t.Errorf("want auth_unverified so the analyst sees the gap, got %+v", rep.Signals)
+	}
+}
+
+func TestURLShortener(t *testing.T) {
+	cases := []struct {
+		body string
+		hit  bool
+	}{
+		{"Track it: https://bit.ly/3xYzAb", true},
+		{"https://www.bit.ly/3xYzAb", true}, // subdomain of a shortener
+		{"https://t.co/AbC123", true},
+		{"https://tinyurl.com/yc8k2", true},
+		// Must NOT fire:
+		{"https://bitly.com/pages/pricing", false}, // the company site, not a short link
+		{"https://notbit.ly/x", false},
+		{"https://microsoft.co/x", false},
+		{"no links here", false},
+	}
+	for _, c := range cases {
+		msg := &email.Message{TextBody: c.body}
+		var hit bool
+		for _, s := range (LinkCheck{}).Run(&Input{Msg: msg, Links: extract.Links(msg)}) {
+			hit = hit || s.ID == "url_shortener"
+		}
+		if hit != c.hit {
+			t.Errorf("%q: url_shortener=%v, want %v", c.body, hit, c.hit)
+		}
+	}
+}
+
+func TestURLShortenerCountsOnce(t *testing.T) {
+	msg := &email.Message{TextBody: "https://bit.ly/a https://bit.ly/b https://bit.ly/c", From: &email.Address{Domain: "example.org"}}
+	rep := New(DefaultConfig).Analyze(msg)
+	if s, ok := signalByID(rep, "url_shortener"); !ok || s.Score != 10 || rep.Score != 10 {
+		t.Fatalf("three short links should merge into one +10 signal, got score %d: %+v", rep.Score, rep.Signals)
 	}
 }
 
