@@ -2,6 +2,7 @@
 //
 //	INSPEKT_REDIS_ADDR    Redis address (default localhost:6379)
 //	INSPEKT_WORKERS       concurrent consumers in this process (default 4)
+//	INSPEKT_METRICS_ADDR  Prometheus /metrics listener (default :9090)
 //	INSPEKT_MARIADB_DSN   where results are kept, e.g.
 //	                      inspekt:secret@tcp(mariadb:3306)/inspekt
 //	                      (unset: results stay in Redis for 24 h)
@@ -12,16 +13,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/metrics"
 	"github.com/GligorcoGligorov/inspekt/internal/pipeline"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
 	"github.com/GligorcoGligorov/inspekt/internal/store"
@@ -73,7 +78,22 @@ func main() {
 		Concurrency: workers,
 		Log:         log,
 		Handle:      pipeline.Handler(eng, email.DefaultLimits, st),
+		Observe:     metrics.ObserveOutcome,
 	}
+
+	// Analysis happens here, so the per-check latency and outcome metrics
+	// live here too; Prometheus scrapes every worker.
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.Handler())
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
+	msrv := &http.Server{Addr: config.Env("INSPEKT_METRICS_ADDR", ":9090"), Handler: mux,
+		ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := msrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server", "err", err)
+		}
+	}()
+	defer msrv.Close()
 
 	// SIGTERM (docker stop, a deploy) stops reading; scans in progress
 	// finish and are acknowledged before the process exits.

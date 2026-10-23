@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: inspekt-api
+    static_configs:
+      - targets: ["api:8080"]
+  # DNS discovery finds every worker replica (docker compose up --scale worker=N).
+  - job_name: inspekt-worker
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 9090

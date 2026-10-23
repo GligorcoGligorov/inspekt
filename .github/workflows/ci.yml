@@ -70,4 +70,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: validate Prometheus config
+        run: docker run --rm -v "$PWD/deploy/prometheus:/cfg:ro" --entrypoint promtool prom/prometheus:v3.13.5 check config /cfg/prometheus.yml
       - run: make e2e

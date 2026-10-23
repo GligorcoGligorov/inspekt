@@ -14,10 +14,13 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/metrics"
 	"github.com/GligorcoGligorov/inspekt/internal/pipeline"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
 	"github.com/GligorcoGligorov/inspekt/internal/store"
@@ -35,6 +38,8 @@ func newTestServer() *httptest.Server {
 func TestScanEndpoint(t *testing.T) {
 	ts := newTestServer()
 	defer ts.Close()
+	// Metrics are process-wide, so assert on the change, not the value.
+	before := testutil.ToFloat64(metrics.Verdicts.WithLabelValues("malicious"))
 
 	raw, err := os.ReadFile("../../testdata/phish_lookalike.eml")
 	if err != nil {
@@ -56,10 +61,15 @@ func TestScanEndpoint(t *testing.T) {
 		t.Fatalf("verdict %s", rep.Verdict)
 	}
 
+	if got := testutil.ToFloat64(metrics.Verdicts.WithLabelValues("malicious")) - before; got != 1 {
+		t.Fatalf("malicious verdicts went up by %v, want 1", got)
+	}
 	m, _ := http.Get(ts.URL + "/metrics")
 	b, _ := io.ReadAll(m.Body)
-	if !strings.Contains(string(b), `inspekt_verdicts_total{verdict="malicious"} 1`) {
-		t.Fatalf("metrics not updated:\n%s", b)
+	for _, want := range []string{`inspekt_verdicts_total{verdict="malicious"}`, `inspekt_check_duration_seconds_bucket{check="lookalike"`, "go_goroutines"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("/metrics missing %q", want)
+		}
 	}
 }
 
@@ -91,7 +101,7 @@ func asyncStack(t *testing.T) (*httptest.Server, *miniredis.Miniredis) {
 
 	st := &store.Memory{}
 	w := &queue.Worker{Q: q, Name: "t", Concurrency: 2, Block: 20 * time.Millisecond,
-		Handle: pipeline.Handler(eng, lim, st)}
+		Handle: pipeline.Handler(eng, lim, st), Observe: metrics.ObserveOutcome}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = w.Run(ctx); close(done) }()
@@ -149,6 +159,9 @@ func pollScan(t *testing.T, base, location string) scanBody {
 
 func TestAsyncScan(t *testing.T) {
 	ts, _ := asyncStack(t)
+	enqueued := testutil.ToFloat64(metrics.Enqueued)
+	done := testutil.ToFloat64(metrics.Outcomes.WithLabelValues("done"))
+	waits := histogramCount(t, "inspekt_queue_wait_seconds")
 
 	res := postFile(t, ts.URL, "phish_lookalike.eml")
 	loc := res.Header.Get("Location")
@@ -175,14 +188,38 @@ func TestAsyncScan(t *testing.T) {
 		t.Fatalf("resubmit: Location %q, body %v", again.Header.Get("Location"), body)
 	}
 
-	m, _ := http.Get(ts.URL + "/metrics")
-	b, _ := io.ReadAll(m.Body)
-	m.Body.Close()
-	for _, want := range []string{"inspekt_scans_enqueued_total 2", "inspekt_queue_pending 0", "inspekt_queue_dead_letters 0"} {
-		if !strings.Contains(string(b), want) {
-			t.Errorf("metrics missing %q:\n%s", want, b)
+	if d := testutil.ToFloat64(metrics.Enqueued) - enqueued; d != 2 {
+		t.Errorf("enqueued went up by %v, want 2", d)
+	}
+	// The result is readable once saved; the worker counts "done" just
+	// after, when it has acknowledged the entry.
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(metrics.Outcomes.WithLabelValues("done"))-done < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if d := testutil.ToFloat64(metrics.Outcomes.WithLabelValues("done")) - done; d != 1 {
+		t.Errorf("done outcomes went up by %v, want 1 (the resubmit is not re-analysed)", d)
+	}
+	if d := histogramCount(t, "inspekt_queue_wait_seconds") - waits; d != 1 {
+		t.Errorf("queue wait observed %d times, want 1", d)
+	}
+}
+
+// histogramCount is the number of observations in a histogram on the
+// default registry.
+func histogramCount(t *testing.T, name string) uint64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == name {
+			return mf.GetMetric()[0].GetHistogram().GetSampleCount()
 		}
 	}
+	t.Fatalf("histogram %s not registered", name)
+	return 0
 }
 
 func TestAsyncUnparseableFails(t *testing.T) {

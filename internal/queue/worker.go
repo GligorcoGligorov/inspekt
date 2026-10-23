@@ -52,6 +52,16 @@ type Worker struct {
 	ClaimEvery  time.Duration // watchdog interval; default 30 s
 	Block       time.Duration // XREADGROUP block time; default 5 s
 	JobTimeout  time.Duration // bound on one message, also during shutdown; default 30 s
+
+	// Observe, if set, is told the outcome of every delivery: "done",
+	// "failed" (permanent), "retry" (transient error) or "dead".
+	Observe func(outcome string)
+}
+
+func (w *Worker) observe(outcome string) {
+	if w.Observe != nil {
+		w.Observe(outcome)
+	}
 }
 
 func (w *Worker) defaults() {
@@ -210,10 +220,12 @@ func (w *Worker) process(ctx context.Context, m redis.XMessage) {
 	switch {
 	case errors.As(err, &perm):
 		w.finish(ctx, m, id, map[string]any{"status": string(StatusFailed), "error": err.Error()})
+		w.observe("failed")
 		log.Warn("scan failed permanently", "err", err)
 	case err != nil:
 		// Transient: record why, leave the entry pending for a retry.
 		w.Q.R.HSet(ctx, scanKey(id), "last_error", err.Error())
+		w.observe("retry")
 		log.Error("scan attempt failed", "attempt", attempts, "err", err)
 	default:
 		fields := map[string]any{"status": string(StatusDone)}
@@ -221,6 +233,7 @@ func (w *Worker) process(ctx context.Context, m redis.XMessage) {
 			fields["report"] = report
 		}
 		w.finish(ctx, m, id, fields)
+		w.observe("done")
 		log.Info("scan done", "attempt", attempts, "ms", time.Since(start).Milliseconds())
 	}
 }
@@ -268,6 +281,7 @@ func (w *Worker) deadLetter(ctx context.Context, m redis.XMessage, id string, at
 		w.Log.Error("dead-letter", "id", id, "err", err)
 		return
 	}
+	w.observe("dead")
 	w.Log.Error("scan dead-lettered", "id", id, "entry", m.ID, "reason", reason)
 }
 

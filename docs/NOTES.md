@@ -572,3 +572,73 @@ Rule we followed: never round a number up, write down the machine
    were identical. Benchmarks show it's faster; the evaluation shows it's
    still correct. A speed-up that changes results is a behaviour change and
    needs its own justification.
+
+---
+
+## Step 8: Prometheus metrics and a Grafana dashboard
+
+### The idea
+
+Logs tell you what happened to *one* email. Metrics tell you how the
+*system* is doing right now: how many scans per second, how long clients
+wait, whether anything is stuck. Prometheus asks every service for its
+numbers every 5 seconds (it "scrapes" `/metrics`) and stores them; Grafana
+draws them.
+
+### What we measure, and where
+
+The important design question was **where each number comes from**:
+
+- In async mode the **worker** does the analysis, so the analysis metrics
+  (scans by verdict, time per check, which signals fire, queue wait,
+  outcomes) come from the worker. Each worker has its own `/metrics` on
+  port 9090. Prometheus finds every worker through DNS, so starting 3
+  workers needs no config change.
+- **Queue depth** (lag, pending, dead letters) is read from Redis at the
+  moment Prometheus asks. If each process counted it itself, two API
+  replicas would disagree; Redis is the single source of truth.
+- Counters vs histograms: a **counter** only goes up (scans done); Grafana
+  turns it into "per second" with `rate()`. A **histogram** puts each
+  duration in a bucket, so Grafana can compute p50/p95/p99 across all
+  workers. An average would hide the slow requests that p99 shows.
+
+### Two details worth knowing
+
+1. **One broken source must not hide everything.** By default, if any
+   metric fails to collect (say Redis is down), the Prometheus Go library
+   answers 500 for the *whole* `/metrics` page, and all graphs go blank
+   exactly during the outage you need them for. We serve with
+   `ContinueOnError`, and a test checks that with Redis down the other
+   metrics are still there.
+2. **The dashboard is tested.** A test reads the dashboard JSON and fails
+   if a panel queries a metric the code does not define. Without it,
+   renaming a metric silently empties a panel and nobody notices until
+   they need it.
+
+Also: `GOMEMLIMIT` from step 4 shows on the dashboard as the worker's
+memory staying flat under load.
+
+### Interview questions
+
+1. **"Why histograms and not just an average latency?"**
+   An average hides the users who wait. If 99 scans take 10 ms and one
+   takes 2 s, the average is ~30 ms and looks fine. A histogram lets me
+   graph p95 and p99, and it can be **aggregated across workers**
+   (summing bucket counts is valid, averaging percentiles is not). The cost
+   is choosing bucket boundaries up front; I picked exponential buckets
+   around the latencies the benchmarks measured.
+
+2. **"What would you alert on?"**
+   Symptoms users feel, not causes: queue-wait p95 above a budget (users
+   wait), dead letters above 0 (a message we could not scan), pending
+   growing for minutes (workers dying or stuck), lag growing (too few
+   workers). And one detection alert: a signal's share of clean mail
+   jumping, which means a rule started firing on legitimate mail.
+
+3. **"Your /metrics reads Redis on every scrape. Is that a problem?"**
+   It is 3 cheap Redis commands every 5 seconds per API replica: nothing.
+   The benefit is that the numbers are correct whatever the number of
+   processes. If scrapes ever got expensive, I would move it to one
+   exporter process or cache the result for a few seconds. And if Redis is
+   down, only those three gauges disappear: no data, rather than a
+   misleading zero.

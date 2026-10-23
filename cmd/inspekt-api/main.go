@@ -17,12 +17,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/api"
 	"github.com/GligorcoGligorov/inspekt/internal/config"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/metrics"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
 	"github.com/GligorcoGligorov/inspekt/internal/store"
 	"github.com/GligorcoGligorov/inspekt/migrations"
@@ -41,6 +43,7 @@ func main() {
 		rdb := redis.NewClient(&redis.Options{Addr: addr})
 		defer rdb.Close()
 		q = &queue.Queue{R: rdb}
+		prometheus.MustRegister(metrics.QueueCollector{Q: q})
 	}
 	var st store.Store
 	if dsn := config.Env("INSPEKT_MARIADB_DSN", ""); dsn != "" {

@@ -99,8 +99,9 @@ flowchart LR
   full, the API answers `503` with `Retry-After` instead of losing queued scans.
 - **Graceful shutdown:** on SIGTERM the worker stops reading, then finishes and
   acknowledges what it is analysing.
-- `/readyz` checks Redis and MariaDB; `/metrics` adds queue lag, pending and
-  dead-letter counts.
+- `/readyz` checks Redis and MariaDB. Prometheus metrics come from the API
+  (`:8080/metrics`) and from every worker (`:9090/metrics`); see
+  [Observability](#observability).
 
 ### Analysis
 
@@ -128,6 +129,8 @@ flowchart LR
 | `internal/store` | `Store` interface; MariaDB (upsert, signals table, migrations under a named lock) and in-memory |
 | `internal/pipeline` | What a worker does with a job: analyse, then save |
 | `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
+| `internal/metrics` | Prometheus metrics shared by API and worker; queue gauges read from Redis at scrape time |
+| `deploy/` | Prometheus scrape config, Grafana datasource and dashboard (provisioned) |
 | `migrations/` | Numbered SQL files, embedded in the binaries and applied at startup |
 | `cmd/` | `inspekt` (CLI), `inspekt-api`, `inspekt-worker`, `inspekt-load` (load generator) |
 | `eval/` | Corpus fetch (pinned), held-out split, precision / recall / FPR, analysis, CI gates |
@@ -191,6 +194,36 @@ messages. The load test found a real bug: InnoDB deadlocks between
 concurrent workers saving signals (scans survived, but waited a minute for
 the watchdog); fixed and covered by a 200-way concurrent test. In the load
 test the limit is the read path that client polling creates, not analysis.
+
+## Observability
+
+```bash
+docker compose --profile observability up -d --build   # adds Prometheus and Grafana
+open http://localhost:3000                             # dashboard "Inspekt" (anonymous read-only)
+```
+
+![Grafana dashboard during a load test](docs/img/grafana.png)
+
+*Taken during a load run (8 clients, real corpus mix plus samples, polling
+every 50 ms) on the MacBook Air. The p99 queue-wait rise at the right edge
+coincides with restarting Grafana and rendering this screenshot on the same
+laptop.*
+
+| Metric | Type | From | What it answers |
+|---|---|---|---|
+| `inspekt_verdicts_total{verdict}` | counter | worker (API inline) | How much mail, and what share is flagged? |
+| `inspekt_queue_wait_seconds` | histogram | worker | How long a client waits: API acceptance → result saved |
+| `inspekt_check_duration_seconds{check}` | histogram | worker (API inline) | Which check costs time (QR decoding dominates on image mail) |
+| `inspekt_scan_duration_seconds` | histogram | worker (API inline) | Parse + analysis time per message |
+| `inspekt_worker_outcomes_total{outcome}` | counter | worker | done / failed / retry / dead per delivery |
+| `inspekt_signals_total{signal}` | counter | worker (API inline) | Which rules fire most (false-positive drivers) |
+| `inspekt_queue_lag`, `_pending`, `_dead_letters` | gauge | API (read from Redis at scrape) | Backlog, stuck work, poison messages |
+| `inspekt_scans_enqueued_total`, `inspekt_scan_failures_total` | counter | API | Accepted and rejected submissions |
+
+Plus the Go runtime and process metrics (memory, goroutines). A Redis outage
+removes only the queue gauges from `/metrics`; everything else keeps being
+served. A test fails if the dashboard queries a metric the code does not
+define.
 
 ## Design decisions
 
@@ -259,8 +292,8 @@ In order of expected impact on the measured weaknesses:
    `google.com/url?q=`, `doubleclick.net` and ESP click links, without fetching.
 3. **A modern ham corpus** (with DMARC, shorteners, forwarding) to measure the
    false-positive cost of authentication signals and settle the `p=none` risk.
-4. **Prometheus histograms and a Grafana dashboard** (per-check latency, queue
-   lag, dead letters) — next in the plan.
+4. **Alerts** on the existing metrics: dead letters above 0, pending growing,
+   queue-wait p95 over a budget, a signal's share of clean mail jumping.
 5. **The grey-zone LLM** for text-only BEC, called only for borderline scores,
    allowed only to *add* points (prompt injection cannot clean a message).
 6. **Webhooks or long polling** for results instead of client polling, which

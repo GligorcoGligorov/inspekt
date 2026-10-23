@@ -10,15 +10,14 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"sync/atomic"
 	"time"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/metrics"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
 	"github.com/GligorcoGligorov/inspekt/internal/store"
 )
@@ -32,17 +31,6 @@ type Server struct {
 	Queue *queue.Queue
 	// Store, when set, is where finished results are read from.
 	Store store.Store
-
-	m metrics
-}
-
-// metrics are exported in Prometheus text format without a client library,
-// to keep Step 0 dependency-free. Step 7 swaps in prometheus/client_golang
-// with histograms.
-type metrics struct {
-	scans, failures, enqueued    atomic.Int64
-	clean, suspicious, malicious atomic.Int64
-	durationMicrosTotal          atomic.Int64
 }
 
 // Handler returns the routed HTTP handler.
@@ -60,7 +48,7 @@ func (s *Server) Handler() http.Handler {
 		w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /readyz", s.ready)
-	mux.HandleFunc("GET /metrics", s.metrics)
+	mux.Handle("GET /metrics", metrics.Handler())
 	return mux
 }
 
@@ -84,7 +72,7 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rep := s.Engine.Analyze(msg)
-	s.count(rep.Verdict, time.Since(start))
+	metrics.ObserveReport(rep, time.Since(start))
 	s.Log.Info("scan",
 		"verdict", rep.Verdict, "score", rep.Score,
 		"signals", len(rep.Signals), "ms", time.Since(start).Milliseconds())
@@ -119,7 +107,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusServiceUnavailable, errors.New("queue unavailable"))
 		return
 	}
-	s.m.enqueued.Add(1)
+	metrics.Enqueued.Inc()
 	s.Log.Info("enqueued", "id", id, "status", status, "bytes", len(raw))
 
 	w.Header().Set("Location", "/v1/scans/"+id)
@@ -192,41 +180,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func (s *Server) fail(w http.ResponseWriter, code int, err error) {
-	s.m.failures.Add(1)
+	metrics.ScanFailures.Inc()
 	writeJSON(w, code, map[string]string{"error": err.Error()})
-}
-
-func (s *Server) count(v analyze.Verdict, d time.Duration) {
-	s.m.scans.Add(1)
-	s.m.durationMicrosTotal.Add(d.Microseconds())
-	switch v {
-	case analyze.VerdictClean:
-		s.m.clean.Add(1)
-	case analyze.VerdictSuspicious:
-		s.m.suspicious.Add(1)
-	case analyze.VerdictMalicious:
-		s.m.malicious.Add(1)
-	}
-}
-
-func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprintf(w, "# TYPE inspekt_scans_total counter\ninspekt_scans_total %d\n", s.m.scans.Load())
-	fmt.Fprintf(w, "# TYPE inspekt_scan_failures_total counter\ninspekt_scan_failures_total %d\n", s.m.failures.Load())
-	fmt.Fprintf(w, "# TYPE inspekt_verdicts_total counter\n")
-	fmt.Fprintf(w, "inspekt_verdicts_total{verdict=\"clean\"} %d\n", s.m.clean.Load())
-	fmt.Fprintf(w, "inspekt_verdicts_total{verdict=\"suspicious\"} %d\n", s.m.suspicious.Load())
-	fmt.Fprintf(w, "inspekt_verdicts_total{verdict=\"malicious\"} %d\n", s.m.malicious.Load())
-	fmt.Fprintf(w, "# TYPE inspekt_scan_duration_seconds_sum counter\ninspekt_scan_duration_seconds_sum %f\n",
-		float64(s.m.durationMicrosTotal.Load())/1e6)
-	if s.Queue == nil {
-		return
-	}
-	fmt.Fprintf(w, "# TYPE inspekt_scans_enqueued_total counter\ninspekt_scans_enqueued_total %d\n", s.m.enqueued.Load())
-	// Queue depth is read from Redis, so it is correct across API replicas.
-	if st, err := s.Queue.Stats(r.Context()); err == nil {
-		fmt.Fprintf(w, "# TYPE inspekt_queue_lag gauge\ninspekt_queue_lag %d\n", st.Lag)
-		fmt.Fprintf(w, "# TYPE inspekt_queue_pending gauge\ninspekt_queue_pending %d\n", st.Pending)
-		fmt.Fprintf(w, "# TYPE inspekt_queue_dead_letters gauge\ninspekt_queue_dead_letters %d\n", st.Dead)
-	}
 }

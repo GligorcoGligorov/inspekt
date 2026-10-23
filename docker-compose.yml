@@ -1,8 +1,12 @@
-# API + Redis Streams + worker + MariaDB. Step 7 adds prometheus + grafana
-# (see docs/WEEKEND_PLAN.md).
+# API + Redis Streams + worker + MariaDB. Prometheus and Grafana run with
+# the "observability" profile:
 #
-# DEV-ONLY DEFAULT: the MariaDB password falls back to "inspekt-dev", which is
-# public. Anywhere but a laptop, set INSPEKT_DB_PASSWORD (see .env.example).
+#   docker compose --profile observability up -d --build
+#   open http://localhost:3000   (dashboard "Inspekt")
+#
+# DEV-ONLY DEFAULTS: the MariaDB and Grafana admin passwords fall back to
+# "inspekt-dev", which is public. Anywhere but a laptop, set
+# INSPEKT_DB_PASSWORD and INSPEKT_GRAFANA_PASSWORD (see .env.example).
 x-inspekt: &inspekt
   build: .
   image: inspekt:local
@@ -74,6 +78,7 @@ services:
       INSPEKT_REDIS_ADDR: "redis:6379"
       INSPEKT_MARIADB_DSN: "inspekt:${INSPEKT_DB_PASSWORD:-inspekt-dev}@tcp(mariadb:3306)/inspekt"
       INSPEKT_WORKERS: "4"
+      INSPEKT_METRICS_ADDR: ":9090"      # scraped by Prometheus (not published)
       # Go's GC does not see the container limit; without this the heap
       # grows to 256m under large QR images and risks an OOM kill.
       GOMEMLIMIT: 200MiB
@@ -85,6 +90,42 @@ services:
       resources:
         limits: { memory: 256m }
 
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    depends_on: [api, worker]
+    deploy:
+      resources:
+        limits: { memory: 256m }
+
+  grafana:
+    image: grafana/grafana:13.0.11
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${INSPEKT_GRAFANA_PASSWORD:-inspekt-dev}
+      # Read-only anonymous access for a local demo; admin login for edits.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/inspekt.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/inspekt.json:/var/lib/grafana/dashboards/inspekt.json:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+    deploy:
+      resources:
+        limits: { memory: 384m }
+
 volumes:
   redis-data:
   mariadb-data:
+  prometheus-data:
