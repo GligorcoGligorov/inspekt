@@ -97,8 +97,10 @@ docker compose exec -T redis redis-cli FLUSHALL >/dev/null
 body=$(curl -sf "$BASE$phish") || fail "GET $phish after Redis flush"
 jq -e '.status == "done" and .report.verdict == "malicious" and .received_at != null and .scanned_at != null' <<<"$body" >/dev/null ||
 	fail "after Redis flush: $(jq -c '{status, verdict: .report.verdict, received_at}' <<<"$body")"
-sigs=$(docker compose exec -T mariadb mariadb -N -uinspekt -p"${INSPEKT_DB_PASSWORD:-inspekt-dev}" inspekt \
-	-e "SELECT COUNT(*) FROM signals WHERE scan_id = '${phish##*/}'")
+# The password is read inside the container, where compose put the real one
+# (a .env may override the dev default).
+sigs=$(docker compose exec -T mariadb sh -c 'mariadb -N -uinspekt -p"$MARIADB_PASSWORD" inspekt -e "$0"' \
+	"SELECT COUNT(*) FROM signals WHERE scan_id = '${phish##*/}'") || fail "could not query MariaDB"
 [ "$sigs" -ge 5 ] || fail "signals rows for the phish: $sigs"
 echo "ok served from MariaDB, $sigs signal rows"
 
