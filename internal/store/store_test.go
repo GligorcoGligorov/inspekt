@@ -125,6 +125,38 @@ func TestMariaDB(t *testing.T) {
 	s := &MariaDB{DB: db}
 	contract(t, s)
 
+	// Many workers saving at once: found by the load test, where concurrent
+	// saves deadlocked in InnoDB (Error 1213) and waited a minute for the
+	// watchdog. Saves must succeed without the caller retrying.
+	t.Run("concurrent saves do not fail", func(t *testing.T) {
+		var wg sync.WaitGroup
+		errs := make(chan error, 200)
+		ids := make([]string, 20)
+		for i := range ids {
+			ids[i] = newID(t)
+		}
+		for i := range 200 {
+			wg.Go(func() {
+				rep := report(analyze.VerdictMalicious, 80,
+					analyze.Signal{ID: "dmarc_fail", Score: 35}, analyze.Signal{ID: "lookalike_link", Score: 30},
+					analyze.Signal{ID: fmt.Sprintf("sig_%d", i%7), Score: 5})
+				// Mostly new scans, some re-saves of the same ids (redelivery).
+				id := newID(t)
+				if i%4 == 0 {
+					id = ids[i%len(ids)]
+				}
+				errs <- s.Save(ctx, Scan{ID: id, ReceivedAt: time.Now(), ScannedAt: time.Now(), Report: rep})
+			})
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
 	t.Run("signals rows are replaced on re-save", func(t *testing.T) {
 		id := newID(t)
 		s.Save(ctx, Scan{ID: id, ReceivedAt: time.Now(), ScannedAt: time.Now(), Report: report(analyze.VerdictMalicious, 70,

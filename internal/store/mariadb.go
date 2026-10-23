@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+
+	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 )
 
 // MariaDB stores results in the scans and signals tables (see migrations/).
@@ -40,6 +42,10 @@ func Open(dsn string) (*sql.DB, error) {
 // Save upserts the scan and replaces its signals in one transaction, so a
 // redelivered scan overwrites rather than duplicates. received_at keeps the
 // first value: the message was accepted once, however often it is analysed.
+//
+// InnoDB may abort a transaction as a deadlock victim (1213) or on a lock
+// wait timeout (1205); both mean "try again", so Save retries them a few
+// times before reporting the error.
 func (m *MariaDB) Save(ctx context.Context, s Scan) error {
 	r, err := s.record()
 	if err != nil {
@@ -49,27 +55,52 @@ func (m *MariaDB) Save(ctx context.Context, s Scan) error {
 	if msg := s.Report.Message; msg != nil && msg.From != nil {
 		from = sql.NullString{String: msg.From.Domain, Valid: true}
 	}
+	for attempt := 1; ; attempt++ {
+		err = m.save(ctx, r, from, s.Report.Signals)
+		if attempt == 3 || !retryable(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt*10) * time.Millisecond):
+		}
+	}
+}
 
+func retryable(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && (me.Number == 1213 || me.Number == 1205)
+}
+
+func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs []analyze.Signal) error {
 	tx, err := m.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() // no-op after Commit
 
-	if _, err := tx.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO scans (id, received_at, scanned_at, verdict, score, engine, from_domain, report)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			scanned_at = VALUES(scanned_at), verdict = VALUES(verdict), score = VALUES(score),
 			engine = VALUES(engine), from_domain = VALUES(from_domain), report = VALUES(report)`,
 		r.ID, r.ReceivedAt, r.ScannedAt, r.Verdict, r.Score, r.Engine, from, []byte(r.Report),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store: save scan: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM signals WHERE scan_id = ?`, r.ID); err != nil {
-		return fmt.Errorf("store: clear signals: %w", err)
+	// 1 row affected = a new scan: it has no signals yet, and skipping the
+	// DELETE matters. Deleting rows that do not exist still takes InnoDB
+	// gap locks, which collided with other workers' inserts and deadlocked
+	// under load. Only a re-save (2 = updated, 0 = unchanged) clears rows.
+	if n, _ := res.RowsAffected(); n != 1 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM signals WHERE scan_id = ?`, r.ID); err != nil {
+			return fmt.Errorf("store: clear signals: %w", err)
+		}
 	}
-	if sigs := s.Report.Signals; len(sigs) > 0 {
+	if len(sigs) > 0 {
 		q := "INSERT INTO signals (scan_id, signal_id, score) VALUES " +
 			strings.TrimSuffix(strings.Repeat("(?, ?, ?),", len(sigs)), ",")
 		args := make([]any, 0, 3*len(sigs))
