@@ -103,6 +103,10 @@ message, or failing to parse a sample fails CI.
   `Received` header and assumes our own MTA wrote it. Deploy Inspekt directly
   behind that MTA; headers further down can be forged and are never read.
 - DMARC `pct=` is ignored and the policy is reported, not enforced.
+- `dmarc_fail` scores 35 regardless of the domain's policy. A domain with
+  `p=none` (gmail.com, for one) has not asked receivers to act on failures,
+  and forwarding legitimately breaks DMARC, so this may over-weight it. The
+  weight stays until the public-corpus evaluation (step 7) can measure it.
 - HTML and archive attachments are flagged by type, not opened.
 
 ## Roadmap
