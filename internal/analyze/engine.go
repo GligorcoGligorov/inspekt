@@ -136,7 +136,7 @@ func New(cfg Config) *Engine {
 	return &Engine{cfg: cfg, qr: &qr.Scanner{Limits: cfg.QR}, checks: []Check{
 		AuthCheck{Trusted: cfg.TrustedAuthServIDs, Verifier: cfg.Verifier},
 		SenderCheck{},
-		LookalikeCheck{Protected: cfg.ProtectedDomains},
+		LookalikeCheck{Protected: cfg.ProtectedDomains, brands: newBrands(cfg.ProtectedDomains)},
 		LinkCheck{},
 		AttachmentCheck{},
 		LureCheck{},

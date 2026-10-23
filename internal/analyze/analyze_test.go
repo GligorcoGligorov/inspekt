@@ -24,6 +24,8 @@ func TestRegistrableDomain(t *testing.T) {
 		"mail.example.co.uk":       "example.co.uk",
 		"www.finki.ukim.edu.mk":    "ukim.edu.mk",
 		"198.51.100.23":            "198.51.100.23",
+		"2001:db8::1":              "2001:db8::1",
+		"mail.example.org1":        "example.org1", // ends in a digit, not an IP
 		"Example.COM.":             "example.com",
 	}
 	for in, want := range cases {

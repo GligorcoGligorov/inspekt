@@ -140,18 +140,32 @@ func (SenderCheck) Run(in *Input) []Signal {
 // ---------------------------------------------------------------------------
 // LookalikeCheck flags sender and link domains that imitate protected brands.
 
-type LookalikeCheck struct{ Protected []string }
+type LookalikeCheck struct {
+	Protected []string
+	brands    brands // derived from Protected once, in New
+}
 
 func (LookalikeCheck) Name() string { return "lookalike" }
 
 func (c LookalikeCheck) Run(in *Input) []Signal {
+	bs := c.brands
+	if bs == nil {
+		bs = newBrands(c.Protected)
+	}
 	var out []Signal
+	// Newsletters repeat a few hosts across hundreds of links; each distinct
+	// host is checked once (the engine merges repeated signals anyway).
+	seen := map[string]bool{}
 	check := func(where, host string) {
+		if seen[where+"|"+host] {
+			return
+		}
+		seen[where+"|"+host] = true
 		if strings.Contains(host, "xn--") {
 			out = append(out, Signal{ID: "punycode_domain", Severity: SevMedium, Score: 20,
 				Evidence: []string{fmt.Sprintf("%s uses punycode: %s", where, host)}})
 		}
-		if target, kind, ok := Lookalike(host, c.Protected); ok {
+		if target, kind, ok := bs.match(host); ok {
 			score := 40
 			if kind == KindEmbedded {
 				score = 30 // brand-in-domain has more legitimate uses (resellers)

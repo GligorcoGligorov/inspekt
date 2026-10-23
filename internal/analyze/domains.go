@@ -20,7 +20,7 @@ var multiLabelSuffixes = map[string]bool{
 // registers: "login.secure.example.co.uk" -> "example.co.uk".
 func RegistrableDomain(host string) string {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if host == "" || net.ParseIP(host) != nil {
+	if host == "" || (mayBeIP(host) && net.ParseIP(host) != nil) {
 		return host
 	}
 	labels := strings.Split(host, ".")
@@ -32,6 +32,14 @@ func RegistrableDomain(host string) string {
 		return strings.Join(labels[n-3:], ".")
 	}
 	return strings.Join(labels[n-2:], ".")
+}
+
+// mayBeIP is a cheap pre-check before net.ParseIP, which allocates. It never
+// rejects a real IP literal (IPv4 ends in a digit, IPv6 contains a colon);
+// it only spares the call for ordinary names, which end in a letter.
+func mayBeIP(host string) bool {
+	c := host[len(host)-1]
+	return strings.IndexByte(host, ':') >= 0 || ('0' <= c && c <= '9')
 }
 
 // brandLabel is the registrable domain without its public suffix:
@@ -91,39 +99,75 @@ const (
 // Lookalike reports whether registrable domain d imitates any protected
 // domain, and which one. An exact match is not a lookalike.
 func Lookalike(d string, protected []string) (target string, kind LookalikeKind, ok bool) {
-	d = RegistrableDomain(d)
-	label := brandLabel(d)
+	return newBrands(protected).match(d)
+}
+
+// brand is a protected domain with its derived forms computed once, not
+// once per link (profiling showed that repeated work was ~90 % of the
+// engine's allocations on link-heavy mail).
+type brand struct{ domain, label, skel string }
+
+type brands []brand
+
+func newBrands(protected []string) brands {
+	out := make(brands, 0, len(protected))
 	for _, p := range protected {
-		p = RegistrableDomain(p)
-		if d == p {
+		d := RegistrableDomain(p)
+		l := brandLabel(d)
+		out = append(out, brand{domain: d, label: l, skel: skeleton(l)})
+	}
+	return out
+}
+
+func (bs brands) match(host string) (target string, kind LookalikeKind, ok bool) {
+	d := RegistrableDomain(host)
+	for _, b := range bs {
+		if d == b.domain {
 			return "", "", false // the real thing; stop looking
 		}
 	}
-	for _, p := range protected {
-		p = RegistrableDomain(p)
-		pl := brandLabel(p)
-		if len(pl) < 4 {
+	label := brandLabel(d)
+	skel := skeleton(label)
+	// Brand used as one hyphen-separated token: "login-micros0ft",
+	// "paypal-secure". Matching whole tokens (not substrings) keeps
+	// "pineapple" from matching "apple" and leaves the real
+	// "microsoftonline.com" alone.
+	var toks, tokSkels []string
+	if strings.Contains(label, "-") {
+		toks = strings.Split(label, "-")
+		tokSkels = make([]string, len(toks))
+		for i, t := range toks {
+			if len(t) >= 4 {
+				tokSkels[i] = skeleton(t)
+			}
+		}
+	}
+	for _, b := range bs {
+		if len(b.label) < 4 {
 			continue // short brands produce too many false positives
 		}
 		switch {
-		case label != pl && skeleton(label) == skeleton(pl):
-			return p, KindHomoglyph, true
-		case levenshtein(label, pl) <= typoBudget(pl):
-			return p, KindTypo, true
+		case label != b.label && skel == b.skel:
+			return b.domain, KindHomoglyph, true
+		case withinEdits(label, b.label, typoBudget(b.label)):
+			return b.domain, KindTypo, true
 		}
-		// Brand used as one hyphen-separated token: "login-micros0ft",
-		// "paypal-secure". Matching whole tokens (not substrings) keeps
-		// "pineapple" from matching "apple" and leaves the real
-		// "microsoftonline.com" alone.
-		if strings.Contains(label, "-") {
-			for _, tok := range strings.Split(label, "-") {
-				if tok == pl || (len(tok) >= 4 && skeleton(tok) == skeleton(pl)) {
-					return p, KindEmbedded, true
-				}
+		for i, tok := range toks {
+			if tok == b.label || (tokSkels[i] != "" && tokSkels[i] == b.skel) {
+				return b.domain, KindEmbedded, true
 			}
 		}
 	}
 	return "", "", false
+}
+
+// withinEdits is levenshtein(a, b) <= budget, skipping the O(n·m) work when
+// the length difference alone already exceeds the budget.
+func withinEdits(a, b string, budget int) bool {
+	if d := len(a) - len(b); d > budget || -d > budget {
+		return false
+	}
+	return levenshtein(a, b) <= budget
 }
 
 func typoBudget(brand string) int {
