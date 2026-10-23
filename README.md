@@ -72,11 +72,18 @@ flowchart LR
 
 | Corpus | Messages | Precision | Recall | FPR |
 |---|---|---|---|---|
-| Sample (`testdata/`) | 4 | 1.00 | 0.67 | 0.00 |
+| Sample (`testdata/`) | 7 | 1.00 | 0.60 | 0.00 |
 
-The missed sample is a text-only business-email-compromise message from a
-correctly authenticated domain: it has no technical signal beyond a Reply-To
-mismatch. That gap is deliberate and documented; see the roadmap.
+Both misses are deliberate, documented gaps (see `testdata/labels.csv` and the
+roadmap), and rules are not tuned to hide them:
+
+- `bec_reply_to.eml`: text-only business-email compromise from a correctly
+  authenticated domain; its only technical signal is a Reply-To mismatch.
+- `qr_phish.eml`: the phishing URL exists only inside a QR code image.
+
+The sample gate (`--min-recall 0.6 --max-fpr 0 --max-parse-errors 0`) therefore
+has no slack: losing any currently caught phish, flagging either legitimate
+message, or failing to parse a sample fails CI.
 
 ## Known limitations
 
