@@ -1,6 +1,6 @@
 import unittest
 
-from metrics import confusion, is_flagged, signal_counts
+from metrics import confusion, is_flagged, signal_counts, split_of
 
 
 class MetricsTest(unittest.TestCase):
@@ -36,3 +36,12 @@ class MetricsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitTest(unittest.TestCase):
+    def test_stable_and_about_one_fifth(self):
+        keys = [f"ham/easy_ham/{i:05d}" for i in range(5000)]
+        splits = [split_of(k) for k in keys]
+        self.assertEqual(splits, [split_of(k) for k in keys])  # deterministic
+        share = splits.count("holdout") / len(splits)
+        self.assertTrue(0.18 < share < 0.22, share)

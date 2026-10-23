@@ -28,22 +28,25 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from metrics import confusion, signal_counts  # noqa: E402
+from metrics import confusion, signal_counts, split_of  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 BATCH = 200
 
 
-def load_labels(args) -> list[tuple[Path, str]]:
-    items: list[tuple[Path, str]] = []
+def load_labels(args) -> list[tuple[Path, str, str]]:
+    """Returns (path, label, split) per message."""
+    items: list[tuple[Path, str, str]] = []
     if args.labels:
         base = Path(args.labels).parent
         with open(args.labels, newline="") as f:
             for row in csv.DictReader(f):
-                items.append((base / row["file"], row["label"]))
+                items.append((base / row["file"], row["label"], split_of(row["file"])))
     for d, label in ((args.ham, "ham"), (args.phish, "phish")):
         if d:
-            items += [(p, label) for p in sorted(Path(d).rglob("*")) if p.is_file()]
+            root = Path(d)
+            items += [(p, label, split_of(f"{label}/{p.relative_to(root)}"))
+                      for p in sorted(root.rglob("*")) if p.is_file()]
     if args.limit:
         items = items[: args.limit]
     return items
@@ -89,11 +92,11 @@ def main() -> int:
 
     cli = build_cli()
     t0 = time.perf_counter()
-    reports = scan(cli, [p for p, _ in items])
+    reports = scan(cli, [p for p, _, _ in items])
     elapsed = time.perf_counter() - t0
 
     results, errors = [], []
-    for path, label in items:
+    for path, label, split in items:
         rep = reports.get(str(path))
         if rep is None:
             errors.append(str(path))
@@ -101,6 +104,7 @@ def main() -> int:
         results.append({
             "file": str(path),
             "label": label,
+            "split": split,
             "verdict": rep["verdict"],
             "score": rep["score"],
             "signals": [s["id"] for s in rep["signals"]],
@@ -114,6 +118,11 @@ def main() -> int:
         "positive_at": args.positive_at,
         "throughput_msgs_per_s": round(len(results) / elapsed, 1) if elapsed else None,
         **cm.summary(),
+        "splits": {
+            name: {"messages": len(part), **confusion(part, args.positive_at).summary()}
+            for name in ("dev", "holdout")
+            if (part := [r for r in results if r["split"] == name])
+        },
         "signals_on_ham": signal_counts(results, "ham").most_common(10),
         "signals_on_phish": signal_counts(results, "phish").most_common(10),
         "missed": [r["file"] for r in results if r["label"] == "phish" and r["verdict"] == "clean"][:20],

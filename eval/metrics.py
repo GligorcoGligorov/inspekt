@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from dataclasses import dataclass, asdict
 
@@ -76,3 +77,18 @@ def signal_counts(results: list[dict], label: str) -> Counter:
         if r["label"] == label:
             c.update(set(r.get("signals", [])))
     return c
+
+
+HOLDOUT_PERCENT = 20
+
+
+def split_of(key: str) -> str:
+    """Assign a message to "dev" or "holdout" by a fixed hash of its key.
+
+    The key is the message's path relative to the corpus root, so the split
+    is the same on every machine and every run, and a message never moves
+    between splits. Tune weights by looking at dev only; holdout shows
+    whether a change generalises or just fits the messages we looked at.
+    """
+    h = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
+    return "holdout" if h % 100 < HOLDOUT_PERCENT else "dev"

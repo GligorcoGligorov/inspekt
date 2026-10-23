@@ -144,9 +144,29 @@ flowchart LR
 
 ## Detection quality
 
-| Corpus | Messages | Precision | Recall | FPR |
-|---|---|---|---|---|
-| Sample (`testdata/`) | 7 | 1.00 | 0.80 | 0.00 |
+Measured with `make eval` on public corpora (details, sources, checksums and
+every intermediate result in [`docs/EVAL.md`](docs/EVAL.md)):
+
+| Corpus | Ham | Phish | Precision | Recall | F1 | FPR | Throughput |
+|---|---|---|---|---|---|---|---|
+| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9108 | 0.1894 | 0.3135 | 0.0092 | 2,018.0–2,176.9 msg/s |
+| — dev split (80 %) | 3,357 | 1,641 | 0.9083 | 0.1871 | | 0.0092 | |
+| — holdout split (20 %) | 793 | 408 | 0.9205 | 0.1985 | | 0.0088 | |
+| CI subset (holdout, fixed) | 100 | 100 | 0.9412 | 0.16 | | 0.01 | |
+| Sample (`testdata/`) | 2 | 5 | 1.00 | 0.80 | | 0.00 | |
+
+**What this says:** the rules are precise (about 9 in 10 flags are right,
+under 1 % of legitimate mail is flagged) but catch **about one phishing
+message in five**. Most misses link to legitimate infrastructure attackers
+abuse (IPFS gateways, Google, Cloudflare R2, Firebase, click-tracking
+redirects): nothing is structurally wrong, so a structural rule set cannot
+see them. Two weights were changed on evidence (`html_form_in_email` 30 → 10,
+`missing_from` 20 → 30), each checked on the held-out split. The ham is
+20 years older than the phishing, which flatters authentication signals;
+see the biases section of `docs/EVAL.md`. Throughput is the CLI on an
+Apple M3, one process.
+
+On the sample corpus:
 
 The one miss is a deliberate, documented gap (see `testdata/labels.csv` and the
 roadmap), and rules are not tuned to hide it: `bec_reply_to.eml` is a
@@ -186,10 +206,11 @@ message, or failing to parse a sample fails CI.
   by up to a full message (25 MiB). The Redis container's memory limit
   (160 MiB) leaves room for that.
 - DMARC `pct=` is ignored and the policy is reported, not enforced.
-- `dmarc_fail` scores 35 regardless of the domain's policy. A domain with
-  `p=none` (gmail.com, for one) has not asked receivers to act on failures,
-  and forwarding legitimately breaks DMARC, so this may over-weight it. The
-  weight stays until the public-corpus evaluation (step 7) can measure it.
+- `dmarc_fail` scores 35 regardless of the domain's policy. Decided with
+  data (docs/EVAL.md): 39 of 51 DMARC-failing phishing messages came from
+  `p=none` domains, and down-weighting would miss 35 of them. The
+  false-positive cost (forwarding and mailing lists break DMARC) could not
+  be measured, because the public ham corpus predates DMARC.
 - HTML and archive attachments are flagged by type, not opened.
 - QR codes are read from PNG, JPEG and GIF attachments only: not from images
   embedded as `data:` URIs in HTML, inside PDFs or Office files, and only

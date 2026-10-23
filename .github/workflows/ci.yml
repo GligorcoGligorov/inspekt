@@ -46,6 +46,24 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: eval-report, path: eval/out/ }
 
+  corpus-eval:
+    # Public-corpus gate on a fixed holdout subset (100 ham + 100 phish).
+    # The corpora are downloaded (pinned by SHA-256), not committed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: corpora-${{ hashFiles('eval/corpora.sha256') }}
+      - run: make eval-subset
+      - uses: actions/upload-artifact@v4
+        with: { name: corpus-subset-report, path: eval/out/ }
+
   e2e:
     # Real Redis + worker via docker compose: async scans, idempotency,
     # recovery after a worker stop and a Redis restart.

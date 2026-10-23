@@ -402,3 +402,95 @@ a service container; locally `make test-db` starts a throwaway one.
    recorded and does nothing. A test runs three migrators concurrently, and
    fails if the lock is removed. In a bigger setup I would run migrations as
    a separate deploy step instead of at startup.
+
+---
+
+## Step 7: Evaluation on public corpora
+
+### What we did
+
+We ran the scanner over **6,202 real emails**: 4,150 legitimate ones
+(SpamAssassin public corpus, 2002–2003) and 2,052 phishing ones (José
+Nazario's corpus, 2019–2025). The downloads are pinned by SHA-256 so the
+numbers are reproducible. Everything is in `docs/EVAL.md`.
+
+### What we found, in order
+
+1. **A crash.** A quarter of the messages "failed to parse". Really, 56
+   phishing emails made the HTML link extractor **panic**, and each panic
+   killed a batch of 200. Cause: we searched a `strings.ToLower` copy of
+   the HTML but cut the original with those positions, and `ToLower` can
+   change byte length (invalid UTF-8, letters like `İ`). Lesson: the first
+   value of a real-data evaluation is often finding bugs, not numbers. It
+   is fixed, with a regression test and a fuzz test in CI.
+2. **The honest baseline:** precision 0.75, recall 0.165, false-positive
+   rate 2.7 %. We catch about one phishing email in six.
+3. **Why false positives:** one rule, `html_form_in_email`, caused 69 % of
+   them. Newsletters have search and subscribe forms. It was right only
+   5 % of the time it fired.
+4. **Why misses:** most missed phishing has *nothing structurally wrong*.
+   The links go to real services attackers abuse: IPFS, Google,
+   Cloudflare R2, Firebase, click-tracking redirects. No lookalike domain,
+   no IP address, authentication passes. Weights cannot fix "no signal".
+
+### How we tuned (and how we avoided fooling ourselves)
+
+- **Held-out split:** every message is put in *dev* (80 %) or *holdout*
+  (20 %) by a hash of its file name. Fixed forever, same on every machine.
+  We **only look at dev** to decide a change, then check it on holdout. If
+  a change only helps dev, it fitted the examples we stared at, and we
+  revert it.
+- **One change at a time**, with before/after numbers for each:
+  - `html_form_in_email` 30 → 10: false-positive rate 2.7 % → 0.9 %
+    (holdout agrees), recall unchanged.
+  - `missing_from` 20 → 30 (an unparseable From header, 96 % phishing on
+    dev): holdout recall 0.174 → 0.199, no new false positives.
+- **What we did *not* change:** SPF/DKIM/DMARC signals look 100 % precise
+  here, but only because the 2002 ham predates SPF and DMARC. Raising them
+  would be "learning" the age of the emails, not phishing.
+
+Final: precision 0.91, recall 0.19, FPR 0.9 %. Precise but low recall,
+which is the normal shape for explainable rules, and we say so in the README.
+
+### The p=none decision
+
+76 % of the DMARC-failing phishing came from domains with `p=none`.
+Attackers pick those domains because receivers don't enforce. Counting
+them less would miss 35 of 39. Decision: keep the weight; the remaining
+risk (forwarding breaks DMARC on real mail) is written down to measure
+with modern ham.
+
+### The CI gate
+
+100 legitimate + 100 phishing emails from the **holdout** split, chosen by
+a fixed hash. They are downloaded in CI rather than committed, because
+the SpamAssassin emails are not ours to redistribute. The gate is set to
+exactly today's numbers, so any change that loses a detection or adds a
+false positive fails CI until someone updates the gate and EVAL.md on purpose.
+
+### Interview questions
+
+1. **"Your recall is 19 %. Isn't that bad?"**
+   It is low, and I report it as it is. What matters is *why*: most misses
+   use legitimate hosting with nothing structurally wrong, which no
+   structural rule can see. The engine is precise (91 %, under 1 % false
+   positives), which is what a first layer should be: cheap, explainable,
+   rarely wrong. The evaluation tells me what to build next (an
+   abusable-hosting signal, open-redirect unwrapping, URL reputation, the
+   grey-zone LLM), and each will be measured the same way. I would rather
+   show 19 % I can explain than 95 % from a model fitted to the test set.
+
+2. **"How do you know your weight changes didn't just overfit the corpus?"**
+   A fixed 80/20 split by hash of the file name, decided before tuning. I
+   only looked at dev to choose changes, made one change at a time, and
+   kept a change only if holdout improved too. Both changes held on
+   holdout. I also refused changes the data seemed to support but that
+   came from corpus bias: the ham is from 2002, so authentication signals
+   cannot fire on it.
+
+3. **"What was the most useful result of the evaluation?"**
+   The crash. A quarter of the corpus silently disappeared from the
+   metrics because one panic killed a batch, and the first numbers looked
+   plausible. Two lessons: count what you *didn't* measure (we report
+   parse errors and gate on them), and evaluate on real, messy data early,
+   because hand-made samples never contain invalid UTF-8 in HTML.

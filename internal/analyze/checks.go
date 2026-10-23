@@ -114,7 +114,7 @@ var emailInText = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za
 func (SenderCheck) Run(in *Input) []Signal {
 	m := in.Msg
 	if m.From == nil {
-		return []Signal{{ID: "missing_from", Severity: SevMedium, Score: 20,
+		return []Signal{{ID: "missing_from", Severity: SevMedium, Score: 30,
 			Evidence: []string{"no parseable From header"}}}
 	}
 	var out []Signal
@@ -201,7 +201,7 @@ func (LinkCheck) Run(in *Input) []Signal {
 				Evidence: []string{l.URL + " (real destination hidden)"}})
 		}
 		if l.Source == "html_form" {
-			out = append(out, Signal{ID: "html_form_in_email", Severity: SevHigh, Score: 30,
+			out = append(out, Signal{ID: "html_form_in_email", Severity: SevLow, Score: 10,
 				Evidence: []string{"form submits to " + l.Host}})
 		}
 		if l.Text != "" && looksLikeURL.MatchString(l.Text) {
