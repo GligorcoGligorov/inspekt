@@ -38,7 +38,9 @@ make e2e           # full stack in Docker + end-to-end checks
 ```
 
 With the full stack (`docker compose up --build`: API, Redis, worker,
-MariaDB), a scan is queued and fetched by id:
+MariaDB), a scan is queued and fetched by id. The MariaDB password defaults
+to a **dev-only** value (`inspekt-dev`, public in this repo); anywhere else,
+copy `.env.example` to `.env` and set `INSPEKT_DB_PASSWORD`.
 
 ```bash
 $ curl -si --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans

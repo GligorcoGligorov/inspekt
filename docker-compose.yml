@@ -1,6 +1,8 @@
 # API + Redis Streams + worker + MariaDB. Step 7 adds prometheus + grafana
-# (see docs/WEEKEND_PLAN.md). The database password defaults to a dev value;
-# set INSPEKT_DB_PASSWORD in the environment or a .env file anywhere else.
+# (see docs/WEEKEND_PLAN.md).
+#
+# DEV-ONLY DEFAULT: the MariaDB password falls back to "inspekt-dev", which is
+# public. Anywhere but a laptop, set INSPEKT_DB_PASSWORD (see .env.example).
 x-inspekt: &inspekt
   build: .
   image: inspekt:local
