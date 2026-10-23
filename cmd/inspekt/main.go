@@ -2,6 +2,9 @@
 //
 //	inspekt scan message.eml            human-readable report
 //	inspekt scan --json a.eml b.eml     one JSON report per line (JSONL)
+//
+// INSPEKT_AUTH_MODE=verify checks SPF / DKIM / DMARC against live DNS
+// instead of reading Authentication-Results (default: headers).
 package main
 
 import (
@@ -9,9 +12,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 )
 
@@ -24,7 +29,16 @@ func main() {
 	asJSON := fs.Bool("json", false, "print one JSON report per line")
 	_ = fs.Parse(os.Args[2:])
 
-	eng := analyze.New(analyze.DefaultConfig)
+	cfg := analyze.DefaultConfig
+	switch mode := os.Getenv("INSPEKT_AUTH_MODE"); mode {
+	case "", "headers":
+	case "verify":
+		cfg.Verifier = &auth.Verifier{Resolver: net.DefaultResolver}
+	default:
+		fmt.Fprintf(os.Stderr, "INSPEKT_AUTH_MODE must be headers or verify, got %q\n", mode)
+		os.Exit(2)
+	}
+	eng := analyze.New(cfg)
 	exit := 0
 	for _, name := range fs.Args() {
 		if err := scan(eng, name, *asJSON, os.Stdout); err != nil {

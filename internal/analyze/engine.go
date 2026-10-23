@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 	"github.com/GligorcoGligorov/inspekt/internal/extract"
 )
@@ -67,6 +68,9 @@ type Config struct {
 	// believed. Anyone can write that header; only the one stamped by our
 	// own MTA is evidence. Empty means "trust all" (fine for offline corpora).
 	TrustedAuthServIDs []string
+	// Verifier, when set, replaces upstream Authentication-Results with our
+	// own SPF / DKIM / DMARC verification (INSPEKT_AUTH_MODE=verify).
+	Verifier *auth.Verifier
 }
 
 // DefaultConfig is tuned against the sample corpus in testdata/ and the
@@ -115,8 +119,13 @@ func New(cfg Config) *Engine {
 	if cfg.ProtectedDomains == nil {
 		cfg.ProtectedDomains = DefaultConfig.ProtectedDomains
 	}
+	if cfg.Verifier != nil && cfg.Verifier.OrgDomain == nil {
+		v := *cfg.Verifier // don't mutate the caller's verifier
+		v.OrgDomain = RegistrableDomain
+		cfg.Verifier = &v
+	}
 	return &Engine{cfg: cfg, checks: []Check{
-		AuthCheck{Trusted: cfg.TrustedAuthServIDs},
+		AuthCheck{Trusted: cfg.TrustedAuthServIDs, Verifier: cfg.Verifier},
 		SenderCheck{},
 		LookalikeCheck{Protected: cfg.ProtectedDomains},
 		LinkCheck{},

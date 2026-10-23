@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/api"
+	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 )
 
@@ -25,6 +27,14 @@ func main() {
 	cfg := analyze.DefaultConfig
 	if ids := os.Getenv("INSPEKT_TRUSTED_AUTHSERV_IDS"); ids != "" {
 		cfg.TrustedAuthServIDs = strings.Split(ids, ",")
+	}
+	switch mode := envOr("INSPEKT_AUTH_MODE", "headers"); mode {
+	case "headers":
+	case "verify":
+		cfg.Verifier = &auth.Verifier{Resolver: net.DefaultResolver}
+	default:
+		log.Error("INSPEKT_AUTH_MODE must be headers or verify", "got", mode)
+		os.Exit(2)
 	}
 
 	srv := &http.Server{
@@ -51,7 +61,7 @@ func main() {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	log.Info("listening", "addr", srv.Addr, "engine", analyze.Version)
+	log.Info("listening", "addr", srv.Addr, "engine", analyze.Version, "auth_mode", envOr("INSPEKT_AUTH_MODE", "headers"))
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server", "err", err)
 		os.Exit(1)

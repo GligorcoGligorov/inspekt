@@ -79,6 +79,9 @@ type Message struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 	Size        int64        `json:"size"`
 	Warnings    []string     `json:"parse_warnings,omitempty"`
+	// Raw is the message exactly as received. DKIM verification hashes
+	// these bytes, so they must not be re-serialised from the parsed form.
+	Raw []byte `json:"-"`
 }
 
 var wordDecoder = &mime.WordDecoder{
@@ -104,7 +107,7 @@ func Parse(r io.Reader, lim Limits) (*Message, error) {
 		return nil, fmt.Errorf("email: headers: %w", err)
 	}
 
-	msg := &Message{Size: int64(len(raw))}
+	msg := &Message{Size: int64(len(raw)), Raw: raw}
 	h := m.Header
 	msg.MessageID = strings.Trim(h.Get("Message-Id"), "<> ")
 	msg.Subject = decodeHeader(h.Get("Subject"))

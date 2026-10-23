@@ -53,6 +53,7 @@ flowchart LR
 | `internal/email` | Hostile-input MIME parser (stdlib only), limits, attachment hashing |
 | `internal/extract` | Links with visible anchor text, form actions |
 | `internal/analyze` | Independent checks, signal merging, scoring, verdict |
+| `internal/auth` | Native SPF / DKIM / DMARC verification behind an injectable DNS `Resolver` |
 | `internal/api` | HTTP API, Prometheus-format metrics |
 | `eval/` | Precision / recall / FPR, false-positive drivers, CI quality gate |
 
@@ -63,7 +64,11 @@ flowchart LR
 - **Explainability over a black box.** Checks emit signals with evidence;
   duplicate signals merge so ten copies of one bad link count once.
 - **Forged headers are not evidence.** `Authentication-Results` is trusted only
-  from configured authserv-ids.
+  from configured authserv-ids, and `INSPEKT_AUTH_MODE=verify` ignores it
+  entirely: Inspekt checks SPF, DKIM and DMARC (with alignment) against DNS
+  itself. All DNS goes through an interface, so tests use a fake DNS.
+- **An outage never looks like an attack.** DNS failures become `temperror`
+  and an informational `auth_unverified` signal worth 0 points.
 - **Wording rules carry little weight** (max 10 points). LLM-written phishing
   defeats keyword lists, so structural signals decide verdicts.
 - **Thresholds change only with an eval run.**
@@ -89,8 +94,15 @@ message, or failing to parse a sample fails CI.
 
 - Registrable domains use a small built-in suffix table instead of the full
   Public Suffix List.
-- Authentication is read from upstream headers; native SPF/DKIM/DMARC
-  verification is on the roadmap.
+- Authentication defaults to `INSPEKT_AUTH_MODE=headers` (read upstream
+  `Authentication-Results`). `verify` mode checks DNS live, which is right for
+  mail arriving now but wrong for archived corpora: their DKIM keys are often
+  rotated out of DNS and their SPF records have changed, so old legitimate mail
+  would fail. Evaluations on public corpora therefore run in `headers` mode.
+- `verify` mode takes the client IP and HELO name from the **topmost**
+  `Received` header and assumes our own MTA wrote it. Deploy Inspekt directly
+  behind that MTA; headers further down can be forged and are never read.
+- DMARC `pct=` is ignored and the policy is reported, not enforced.
 - HTML and archive attachments are flagged by type, not opened.
 
 ## Roadmap

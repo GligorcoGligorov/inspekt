@@ -1,24 +1,35 @@
 package analyze
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/GligorcoGligorov/inspekt/internal/auth"
+	"github.com/GligorcoGligorov/inspekt/internal/email"
 )
 
 // ---------------------------------------------------------------------------
-// AuthCheck reads SPF / DKIM / DMARC results stamped by an upstream MTA.
-// Saturday's work adds our own verification (see docs/WEEKEND_PLAN.md);
-// this check stays as the cheap first signal.
+// AuthCheck turns SPF / DKIM / DMARC results into signals. In "headers" mode
+// it reads Authentication-Results stamped by a trusted upstream MTA. In
+// "verify" mode (Verifier set) it ignores those headers and does its own DNS
+// checks. Both modes share signal IDs and weights, so eval runs compare.
 
-type AuthCheck struct{ Trusted []string }
+type AuthCheck struct {
+	Trusted  []string
+	Verifier *auth.Verifier
+}
 
 func (AuthCheck) Name() string { return "auth" }
 
 var authResult = regexp.MustCompile(`(?i)\b(spf|dkim|dmarc)=(pass|fail|softfail|neutral|none|temperror|permerror)\b`)
 
 func (c AuthCheck) Run(in *Input) []Signal {
+	if c.Verifier != nil {
+		return c.verified(in.Msg)
+	}
 	var out []Signal
 	for _, h := range in.Msg.AuthResults {
 		if !c.trusted(h) {
@@ -26,20 +37,51 @@ func (c AuthCheck) Run(in *Input) []Signal {
 		}
 		for _, m := range authResult.FindAllStringSubmatch(h, -1) {
 			mech, res := strings.ToLower(m[1]), strings.ToLower(m[2])
-			ev := fmt.Sprintf("%s=%s", mech, res)
-			switch {
-			case mech == "dmarc" && res == "fail":
-				out = append(out, Signal{ID: "dmarc_fail", Severity: SevHigh, Score: 35, Evidence: []string{ev}})
-			case mech == "spf" && res == "fail":
-				out = append(out, Signal{ID: "spf_fail", Severity: SevMedium, Score: 15, Evidence: []string{ev}})
-			case mech == "spf" && res == "softfail":
-				out = append(out, Signal{ID: "spf_softfail", Severity: SevLow, Score: 8, Evidence: []string{ev}})
-			case mech == "dkim" && res == "fail":
-				out = append(out, Signal{ID: "dkim_fail", Severity: SevMedium, Score: 15, Evidence: []string{ev}})
+			if s, ok := authSignal(mech, res, fmt.Sprintf("%s=%s", mech, res)); ok {
+				out = append(out, s)
 			}
 		}
 	}
 	return out
+}
+
+func (c AuthCheck) verified(msg *email.Message) []Signal {
+	r := c.Verifier.Verify(context.Background(), msg)
+	var out []Signal
+	add := func(mech string, res auth.Result, ev string) {
+		if s, ok := authSignal(mech, string(res), ev); ok {
+			out = append(out, s)
+		}
+	}
+	add("spf", r.SPF, fmt.Sprintf("spf=%s for %s from %s (verified)", r.SPF, r.SPFDomain, r.ClientIP))
+	add("dkim", r.DKIM, fmt.Sprintf("dkim=%s (verified)", r.DKIM))
+	add("dmarc", r.DMARC, fmt.Sprintf("dmarc=%s, policy %s (verified)", r.DMARC, r.DMARCPolicy))
+
+	// DNS errors carry no points: an outage must not make mail look forged.
+	// The analyst still sees that a check could not run.
+	for _, res := range []auth.Result{r.SPF, r.DKIM, r.DMARC} {
+		if res == auth.TempError || res == auth.PermError {
+			out = append(out, Signal{ID: "auth_unverified", Severity: SevInfo, Score: 0, Evidence: r.Notes})
+			break
+		}
+	}
+	return out
+}
+
+// authSignal maps one mechanism result to a signal. Results not listed
+// (pass, none, neutral, errors) score nothing.
+func authSignal(mech, res, ev string) (Signal, bool) {
+	switch {
+	case mech == "dmarc" && res == "fail":
+		return Signal{ID: "dmarc_fail", Severity: SevHigh, Score: 35, Evidence: []string{ev}}, true
+	case mech == "spf" && res == "fail":
+		return Signal{ID: "spf_fail", Severity: SevMedium, Score: 15, Evidence: []string{ev}}, true
+	case mech == "spf" && res == "softfail":
+		return Signal{ID: "spf_softfail", Severity: SevLow, Score: 8, Evidence: []string{ev}}, true
+	case mech == "dkim" && res == "fail":
+		return Signal{ID: "dkim_fail", Severity: SevMedium, Score: 15, Evidence: []string{ev}}, true
+	}
+	return Signal{}, false
 }
 
 // trusted reports whether header h was written by an authserv-id we trust.

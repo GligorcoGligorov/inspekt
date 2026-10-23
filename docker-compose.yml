@@ -7,6 +7,7 @@ services:
     environment:
       INSPEKT_ADDR: ":8080"
       INSPEKT_TRUSTED_AUTHSERV_IDS: ""   # e.g. mx.yourcompany.com in production
+      INSPEKT_AUTH_MODE: headers         # verify = own SPF/DKIM/DMARC via DNS
     read_only: true
     deploy:
       resources:

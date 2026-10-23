@@ -3,8 +3,11 @@ package analyze
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/GligorcoGligorov/inspekt/internal/auth"
+	"github.com/GligorcoGligorov/inspekt/internal/auth/authtest"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 )
 
@@ -73,6 +76,58 @@ func TestAuthCheckTrustsOnlyOwnMTA(t *testing.T) {
 	}
 }
 
+// spoofed claims to be example.org, arrives from an IP its SPF record does
+// not list, and carries a forged "everything passed" header.
+const spoofed = "Received: from attacker.example (attacker.example [203.0.113.66]) by mx.inspekt.local with ESMTP\r\n" +
+	"Authentication-Results: mx.inspekt.local; spf=pass; dkim=pass; dmarc=pass\r\n" +
+	"Return-Path: <ceo@example.org>\r\n" +
+	"From: CEO <ceo@example.org>\r\n" +
+	"Subject: Wire today\r\n\r\nPlease pay the attached invoice.\r\n"
+
+func analyzeVerified(t *testing.T, dns *authtest.DNS) *Report {
+	t.Helper()
+	msg, err := email.Parse(strings.NewReader(spoofed), email.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(Config{Verifier: &auth.Verifier{Resolver: dns}}).Analyze(msg)
+}
+
+func signalByID(rep *Report, id string) (Signal, bool) {
+	for _, s := range rep.Signals {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return Signal{}, false
+}
+
+func TestAuthCheckVerifyIgnoresForgedHeader(t *testing.T) {
+	rep := analyzeVerified(t, &authtest.DNS{TXT: map[string][]string{
+		"example.org":        {"v=spf1 ip4:192.0.2.10 -all"},
+		"_dmarc.example.org": {"v=DMARC1; p=reject"},
+	}})
+	for _, id := range []string{"dmarc_fail", "spf_fail"} {
+		s, ok := signalByID(rep, id)
+		if !ok || !strings.Contains(s.Evidence[0], "verified") {
+			t.Errorf("want verified %s, got signals %+v", id, rep.Signals)
+		}
+	}
+	if rep.Verdict != VerdictSuspicious {
+		t.Errorf("verdict %s (score %d), want suspicious", rep.Verdict, rep.Score)
+	}
+}
+
+func TestAuthCheckVerifyDNSOutageScoresNothing(t *testing.T) {
+	rep := analyzeVerified(t, &authtest.DNS{Temp: map[string]bool{"example.org": true, "_dmarc.example.org": true}})
+	if rep.Score != 0 {
+		t.Errorf("DNS outage added %d points: %+v", rep.Score, rep.Signals)
+	}
+	if _, ok := signalByID(rep, "auth_unverified"); !ok {
+		t.Errorf("want auth_unverified so the analyst sees the gap, got %+v", rep.Signals)
+	}
+}
+
 func TestMergeKeepsHighestScoreOnce(t *testing.T) {
 	out := merge([]Signal{
 		{ID: "x", Score: 10, Evidence: []string{"a"}},
@@ -99,6 +154,10 @@ func TestSamples(t *testing.T) {
 		// has almost no technical signals. Rules alone cannot catch it;
 		// this is what the LLM stage (WEEKEND_PLAN step 6) is for.
 		{"bec_reply_to.eml", VerdictClean, []string{"reply_to_mismatch"}},
+		// Known gap until step 4: the phishing URL exists only in a QR image.
+		{"qr_phish.eml", VerdictClean, nil},
+		{"support_ticket_reply_to.eml", VerdictClean, []string{"reply_to_mismatch"}},
+		{"ip_link_mailbox.eml", VerdictSuspicious, []string{"ip_literal_url"}},
 	}
 	eng := New(DefaultConfig)
 	for _, c := range cases {
