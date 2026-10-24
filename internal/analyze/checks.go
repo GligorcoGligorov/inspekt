@@ -424,11 +424,13 @@ func hostingKind(l extract.Link) string {
 			return h.kind
 		}
 	}
-	if u, err := url.Parse(l.URL); err == nil {
-		for _, f := range abusableForms {
-			if (l.Host == f.host || strings.HasSuffix(l.Host, "."+f.host)) && strings.HasPrefix(u.Path, f.prefix) {
-				return "form/site builder"
-			}
+	for _, f := range abusableForms {
+		// Parse the URL only for a form-builder host: most links are not.
+		if l.Host != f.host && !strings.HasSuffix(l.Host, "."+f.host) {
+			continue
+		}
+		if u, err := url.Parse(l.URL); err == nil && strings.HasPrefix(u.Path, f.prefix) {
+			return "form/site builder"
 		}
 	}
 	return ""
