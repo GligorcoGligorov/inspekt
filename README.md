@@ -50,24 +50,13 @@ testdata/phish_lookalike.eml
   ...
 ```
 
-### How I built this
+## How I built this
 
-I built Inspekt with [Claude Code](https://claude.com/claude-code) as the
-implementation partner. I wrote the plan
-([`docs/WEEKEND_PLAN.md`](docs/WEEKEND_PLAN.md): which steps, in which
-order, and the rules) and made the decisions that were mine to make: the
-order of the steps, the LLM provider and what data may leave the system,
-that the public corpora must never be sent to an LLM, that the LLM stays
-off unless explicitly enabled, and that numbers are reported as measured.
-Claude Code wrote the code, tests and docs step by step under fixed rules:
-every step ends with green tests and its own commit, CI must pass on
-GitHub before the next step, bugs are fixed in separate commits with a test
-that fails on the old code, weights change only with an evaluation run
-(decided on the dev split, confirmed once on the holdout), and nothing is
-rounded up. Each step is explained in plain language, with interview
-questions, in [`docs/NOTES.md`](docs/NOTES.md), which is how I worked
-through and checked what was built. The commit history shows the order,
-including the bugs the evaluation and load tests found.
+I built Inspekt over one weekend with AI as the implementation partner: Claude (chat) for planning and the initial skeleton, and [Claude Code](https://claude.com/claude-code) for the implementation. I chose the problem and the target, a scan pipeline for email security, and directed the work step by step from the plan in `docs/WEEKEND_PLAN.md`.
+
+The decisions were mine: the order of the steps, the LLM provider and what data may leave the system, that public corpora are never sent to an LLM, that the LLM stays off unless explicitly enabled, and that every number is reported as measured. The implementation followed fixed rules. Every step ends with green tests and its own commit, and CI must pass before the next step. Bugs are fixed in separate commits with a test that fails on the old code. Detection weights change only on evaluation data, decided on the dev split and confirmed once on the holdout.
+
+I tested the running system myself (API, queue, Grafana, the demo page and the Groq integration). `docs/NOTES.md` explains each step in plain language with interview questions; it is what I use to study the design. The commit history shows the order of work, including the bugs the evaluation and load tests found.
 
 ## Quick start
 
