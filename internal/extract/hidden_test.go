@@ -128,3 +128,14 @@ func FuzzHTMLContent(f *testing.F) {
 		}
 	})
 }
+
+// Lines keeps block structure; Visible (what the scoring checks read) does not.
+func TestLinesKeepBlocksVisibleUnchanged(t *testing.T) {
+	got := HTMLContent(`<p>Hello support,</p><p>Copilot, please <b>help</b></p><div>Thanks<br>Ana</div><span style="display:none">x</span>`)
+	if got.Lines != "Hello support,\nCopilot, please help\nThanks\nAna" {
+		t.Errorf("lines %q", got.Lines)
+	}
+	if got.Visible != "Hello support,Copilot, please helpThanksAna" {
+		t.Errorf("visible changed: %q", got.Visible)
+	}
+}

@@ -14,7 +14,7 @@ if it regresses.
 
 | Headline | Result |
 |---|---|
-| Precision / recall / FPR, 6,202 public emails (rules `0.6.0`) | **0.9551 / 0.3943 / 0.0092** |
+| Precision / recall / FPR, 6,202 public emails (rules `0.6.1`, scoring identical to `0.6.0`) | **0.9551 / 0.3943 / 0.0092** |
 | Same, on the 20 % holdout never used for design | 0.9581 / 0.3922 / 0.0088 |
 | Holdout recall since the first public-corpus run | 0.1985 → **0.3922**, no new false positives |
 | Full Docker stack throughput, MacBook Air M3 | **868.1–1,019.6 scans/s** across load runs; end-to-end p95 64.2 ms at 32 clients (rules `0.4.0`) |
@@ -309,6 +309,12 @@ Copilot leak data through an auto-fetched markdown image.
   could not see, rendered as plain text.
 - `hidden_text_salting` (+20, never decisive alone): at least as much
   hidden as visible text, beyond a short preheader.
+- `ai_prompt_injection` (**informational, 0 points**): text written for an
+  AI assistant (instruction overrides, an assistant told to forward,
+  reveal or conceal, markdown-image exfiltration) in hidden text, comments,
+  or visible text that addresses an assistant by name. Shown as
+  "AI-assistant prompt injection (informational)" in the report and on the
+  demo page; it never changes a score or verdict.
 
 **Measured** (design on the dev split, one holdout measurement each; all
 in [`docs/EVAL.md`](docs/EVAL.md)):
@@ -319,7 +325,7 @@ in [`docs/EVAL.md`](docs/EVAL.md)):
 | Reading only visible text | holdout recall 0.3775 → 0.3824, FPR unchanged |
 | `hidden_text_salting` | holdout recall 0.3824 → 0.3922, FPR unchanged (0.88 %) |
 | `hidden_brand_mismatch` | **dropped**: on dev, 7 of 8 hits were Microsoft Word markup in comments; 0 gain at a conservative weight |
-| `ai_prompt_injection` | **dropped**: fired on 0 of 2,049 corpus phishing emails, so it could not be measured; on the synthetic set it flagged 5 of 5 injection emails and 0 of 4 legitimate ones (smoke test, not a measurement) |
+| `ai_prompt_injection` | **informational only (0 points, rules `0.6.1`)**: it cannot be measured on the public corpora, which predate the threat (0 of 2,049 phishing emails contain it). **Smoke test, not a measurement:** on the synthetic `testdata/injection/` set it reports 5 of 5 injection emails and 0 of 4 legitimate ones. Adding it changed no verdict or score on any of the 6,199 corpus messages. |
 
 **Limits.** Not a CSS engine: descendant selectors, external stylesheets,
 computed layout and text inside images count as visible. White text is
@@ -327,9 +333,9 @@ hidden only against a background the email declares; image and gradient
 backgrounds are "unknown". A short preheader before the body never counts
 (legitimate newsletters use them, and `testdata/` has two). The 2002 ham is
 mostly plain text, so the false-positive cost on modern HTML mail is not
-measured. And there is no AI-injection signal in the shipped rules: hidden
-instructions appear in the report's hidden section for the analyst, but
-nothing scores them until real data can measure a detector.
+measured. The AI-injection signal is informational until it can be
+measured on modern labelled mail (real injection attempts and real
+legitimate mail that talks about AI); only then would it earn points.
 
 ## Observability
 

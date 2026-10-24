@@ -29,7 +29,11 @@ type Content struct {
 	Interleaved int         // hidden runs with visible text both before and after them
 	ZeroWidth   int         // invisible format characters (zero-width space, joiner, ...)
 	Comments    string      // HTML comment text, Outlook conditional comments excluded (capped)
-	Truncated   bool        // a limit was hit; the rest of the input was not read
+	// Lines is the visible text again, but with one line per block element
+	// (p, div, br, li, ...), for checks that care where a line starts. The
+	// scoring checks read Visible; Lines exists so they stay unchanged.
+	Lines     string
+	Truncated bool // a limit was hit; the rest of the input was not read
 }
 
 // HiddenRun is one stretch of hidden text and why it is hidden.
@@ -56,6 +60,11 @@ const (
 var nonText = map[string]bool{"script": true, "style": true, "head": true, "title": true,
 	"noscript": true, "template": true, "object": true, "iframe": true}
 
+// Block elements start a new line in Lines.
+var blockElements = map[string]bool{"p": true, "div": true, "br": true, "li": true, "tr": true,
+	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true, "table": true,
+	"blockquote": true, "pre": true, "section": true, "article": true, "header": true, "footer": true, "hr": true}
+
 var voidElements = map[string]bool{"area": true, "base": true, "br": true, "col": true, "embed": true,
 	"hr": true, "img": true, "input": true, "link": true, "meta": true, "source": true, "track": true, "wbr": true}
 
@@ -74,7 +83,7 @@ func HTMLContent(doc string) Content {
 		doc, c.Truncated = doc[:MaxHTMLBytes], true
 	}
 	rules := styleRules(doc)
-	var vis, comments strings.Builder
+	var vis, lines, comments strings.Builder
 	visRunes := 0
 	stack := []frame{{tag: "#root"}}
 	var cur *HiddenRun // run being extended by adjacent hidden text
@@ -85,6 +94,7 @@ func HTMLContent(doc string) Content {
 		switch tt {
 		case html.ErrorToken:
 			c.Visible = strings.Join(strings.Fields(vis.String()), " ")
+			c.Lines = collapseLines(lines.String())
 			c.Comments = strings.TrimSpace(comments.String())
 			for i := range c.Hidden {
 				c.Hidden[i].Text = strings.Join(strings.Fields(c.Hidden[i].Text), " ")
@@ -95,6 +105,9 @@ func HTMLContent(doc string) Content {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name, hasAttr := z.TagName()
 			tag := string(name)
+			if blockElements[tag] {
+				lines.WriteByte('\n')
+			}
 			parent := stack[len(stack)-1]
 			f := frame{tag: tag, hidden: parent.hidden, bg: parent.bg, color: parent.color, skip: parent.skip || nonText[tag]}
 			var style, class, id string
@@ -144,6 +157,9 @@ func HTMLContent(doc string) Content {
 
 		case html.EndTagToken:
 			name, _ := z.TagName()
+			if blockElements[string(name)] {
+				lines.WriteByte('\n')
+			}
 			for i := len(stack) - 1; i > 0; i-- { // close up to the matching element, if open
 				if stack[i].tag == string(name) {
 					stack = stack[:i]
@@ -175,6 +191,7 @@ func HTMLContent(doc string) Content {
 			if strings.TrimSpace(text) == "" {
 				if top.hidden == "" && text != "" {
 					vis.WriteByte(' ')
+					lines.WriteByte(' ')
 				}
 				continue
 			}
@@ -182,6 +199,7 @@ func HTMLContent(doc string) Content {
 				cur = nil
 				if visRunes < MaxVisibleRune {
 					vis.WriteString(text)
+					lines.WriteString(text)
 					visRunes += utf8.RuneCountInString(text)
 				} else {
 					c.Truncated = true
@@ -204,6 +222,17 @@ func HTMLContent(doc string) Content {
 			cur = &c.Hidden[len(c.Hidden)-1]
 		}
 	}
+}
+
+// collapseLines collapses spaces within lines and drops empty lines.
+func collapseLines(s string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.Join(strings.Fields(l), " "); l != "" {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func countInterleaved(runs []HiddenRun, visible int) int {

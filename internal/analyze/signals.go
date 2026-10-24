@@ -17,6 +17,8 @@ var SignalIDs = []string{
 	"abused_hosting_link",
 	// hidden content
 	"hidden_text_salting",
+	// informational (0 points)
+	"ai_prompt_injection",
 	// attachments
 	"double_extension", "executable_attachment", "html_attachment", "macro_document", "container_attachment",
 	// lure

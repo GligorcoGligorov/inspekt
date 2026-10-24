@@ -198,7 +198,7 @@ func shorten(s string, n int) string {
 
 // Version is reported in every result so verdicts can be tied to the rule
 // set that produced them.
-const Version = "inspekt-rules/0.6.0"
+const Version = "inspekt-rules/0.6.1"
 
 // Engine runs a fixed set of checks.
 type Engine struct {
@@ -233,6 +233,7 @@ func New(cfg Config) *Engine {
 		LinkCheck{},
 		HostingCheck{},
 		HiddenCheck{},
+		InjectionCheck{},
 		AttachmentCheck{},
 		LureCheck{},
 	}}

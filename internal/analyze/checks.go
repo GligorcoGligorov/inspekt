@@ -496,3 +496,95 @@ func (HiddenCheck) Run(in *Input) []Signal {
 	}
 	return out
 }
+
+// ---------------------------------------------------------------------------
+// InjectionCheck reports text written for an AI assistant that reads the
+// mailbox (summarisers, Copilot-style assistants), not for the person: the
+// pattern behind EchoLeak. It is informational (0 points): it fired on none
+// of the 2,049 public-corpus phishing emails, which predate the threat, so
+// its false-positive cost on real mail is unmeasured (docs/EVAL.md). It
+// shows the analyst what an assistant would be told; it never changes a
+// score or verdict.
+
+type InjectionCheck struct{}
+
+func (InjectionCheck) Name() string { return "injection" }
+
+var (
+	// Overriding the assistant's own instructions.
+	injOverride = regexp.MustCompile(`(?i)\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|your|any|existing|system)\b[^.\n]{0,20}\b(instructions?|prompts?|rules|guidelines|directives)\b` +
+		`|\bsystem prompt\b|\bdeveloper mode\b|\bnew instructions?\b|\bjailbreak\b|\byou are now\b`)
+	// Addressing an AI in the text.
+	injAddress = regexp.MustCompile(`(?i)\b(ai|llm|language model|(email |ai )?assistant|copilot|chatgpt|gpt-?\d*|gemini|claude)\b[^.\n]{0,30}\b(instructions?|note|reading|summari[sz]\w*|processing)\b` +
+		`|\b(note|instructions?|message) (for|to) (the |any )?(ai|assistant|copilot|model|llm)\b|^\s*(assistant|ai|copilot|system)\s*:`)
+	// What the attacker wants the assistant to do.
+	injAction = regexp.MustCompile(`(?i)\bforward (all|every|any|this|these|the)\b|\b(reveal|include|list|send|output|append|leak|share)\b[^.\n]{0,60}\b(passwords?|codes?|credentials|api keys?|secrets?|tokens?|e-?mail addresses|phone numbers|bank details|conversation|history)\b` +
+		`|\bdo not (tell|mention|reveal|inform|show)\b|\b(tell|inform) (the user|them)\b|\bclassify (this|the) (message|email) as\b|\bwhen(ever)? (you|the user) (summari[sz]e|ask)`)
+	// Exfiltration via an image the assistant would render (EchoLeak).
+	injMarkdownImage = regexp.MustCompile(`!\[[^\]]{0,100}\]\(https?://[^)\s]+\?[^)\s]*\)`)
+	// Speaking *to* an assistant, by name, at the start of a line or sentence.
+	injVocative = regexp.MustCompile(`(?im)(^|[.!?]\s+)(dear |hey |hi )?(copilot|assistant|ai assistant|chatgpt|gemini|claude)\s*[,:]`)
+)
+
+// injection reports why text reads as instructions for an AI, or "".
+// Hidden text and comments need less evidence than visible text: nobody
+// writes to a reader in text the reader cannot see. Visible text counts
+// only when it addresses an assistant by name, so text *about* prompt
+// injection (training, newsletters) does not.
+func injection(text string, visible bool) string {
+	if text == "" {
+		return ""
+	}
+	override, address, action := injOverride.FindString(text), injAddress.FindString(text), injAction.FindString(text)
+	if visible {
+		if v := injVocative.FindString(text); v != "" && (override != "" || action != "") {
+			return fmt.Sprintf("addressed to an assistant (%q) with %q", strings.TrimSpace(v), firstNonEmpty(override, action))
+		}
+		return ""
+	}
+	switch {
+	case injMarkdownImage.MatchString(text):
+		return fmt.Sprintf("markdown image with a data-carrying URL: %q", shorten(injMarkdownImage.FindString(text), 100))
+	case override != "":
+		return fmt.Sprintf("instruction override %q", override)
+	case address != "" && action != "":
+		return fmt.Sprintf("addressed to an assistant (%q) asking it to %q", address, action)
+	}
+	return ""
+}
+
+func firstNonEmpty(xs ...string) string {
+	for _, x := range xs {
+		if x != "" {
+			return x
+		}
+	}
+	return ""
+}
+
+func (InjectionCheck) Run(in *Input) []Signal {
+	c := in.Content
+	var hidden strings.Builder
+	for _, r := range c.Hidden {
+		hidden.WriteString(r.Text + "\n")
+	}
+	where, why := "", ""
+	if why = injection(hidden.String(), false); why != "" {
+		where = "hidden text"
+	} else if why = injection(c.Comments, false); why != "" {
+		where = "an HTML comment"
+	} else {
+		// Line structure matters here ("Copilot," at the start of a line), so
+		// this reads Content.Lines, not the Text the scoring checks read.
+		plain, _ := extract.StripInvisible(in.Msg.TextBody)
+		subject, _ := extract.StripInvisible(in.Msg.Subject)
+		if why = injection(subject+"\n"+plain+"\n"+c.Lines, true); why != "" {
+			where = "visible text"
+		}
+	}
+	if why == "" {
+		return nil
+	}
+	return []Signal{{ID: "ai_prompt_injection", Severity: SevInfo, Score: 0,
+		Evidence: []string{"AI-assistant prompt injection (informational), in " + where + ": " + why}}}
+}

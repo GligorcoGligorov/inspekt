@@ -782,6 +782,28 @@ instructions for an AI assistant that will later summarise the mailbox
 13.9 % of the real phishing emails contain hidden text, against almost none
 of the (old, mostly plain-text) legitimate ones.
 
+### Update: the injection detector ships as informational
+
+`ai_prompt_injection` now runs on every message but is worth **0 points**
+(severity "info"). It cannot change a score or a verdict; it tells the
+analyst "this email contains text written for an AI assistant", and the
+demo page shows it in its own card. We checked that adding it changed
+nothing: all 6,199 corpus messages got the same verdict and score as
+before.
+
+**Why informational:** we can show it catches our five synthetic attacks
+without flagging four tricky legitimate emails, but both sets were written
+by us, and the public corpora predate the threat (zero real examples). A
+signal with points needs a measured false-positive rate on real mail; this
+one has none yet, so it informs instead of deciding.
+
+**When it would get points:** after measuring it on modern labelled data
+(real injection attempts, e.g. from security vendors or opt-in reports,
+and real legitimate mail that talks about AI: newsletters, IT tips,
+training), with the same discipline as every other check: design on one
+split, measure once on a held-out split, and keep the points only if
+recall improves while false positives stay under 1 %.
+
 ### Interview questions
 
 1. **"How do you decide what text is 'hidden' without a browser?"**

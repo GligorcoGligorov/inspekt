@@ -561,3 +561,38 @@ all designs were frozen):
 The ham column is weak evidence for the usual reason: the 2002 ham is mostly
 plain text, with little HTML to hide anything in. Modern legitimate mail
 hides preview text routinely; the `testdata/` newsletters cover that case.
+
+### Step 5: `ai_prompt_injection` shipped as informational → `inspekt-rules/0.6.1`
+
+The detector from step 4 (frozen design, unchanged) now ships as an
+**informational signal: severity info, 0 points**. It can never change a
+score or a verdict; it tells the analyst that the email contains text
+written for an AI assistant, and the demo page shows it as "AI-assistant
+prompt injection (informational)".
+
+It reads its own text view: hidden text, HTML comments, and the visible
+text with one line per block element (`Content.Lines`), because "Copilot,"
+at the start of a line matters to it. The scoring checks keep reading the
+same text as before, which is why the step-4 holdout loss of the
+line-break change does not apply here.
+
+**Verified identical** to `0.6.0` (same corpus, same commands):
+
+| | `0.6.0` | `0.6.1` |
+|---|---|---|
+| dev TP / FP / TN / FN | 648 / 31 / 3,326 / 993 | 648 / 31 / 3,326 / 993 |
+| holdout TP / FP / TN / FN | 160 / 7 / 786 / 248 | 160 / 7 / 786 / 248 |
+| CI subset TP / FP / TN / FN | 41 / 1 / 99 / 59 | 41 / 1 / 99 / 59 |
+| messages with a different verdict, score or scoring signal | | **0 of 6,199** |
+| corpus messages where `ai_prompt_injection` fires | | 0 |
+
+**Smoke test, not a measurement** (`make eval-injection`,
+`testdata/injection/`): **5 of 5** synthetic injection emails reported
+(hidden instruction with markdown-image exfiltration, comment telling an
+assistant to forward mail, visible instruction to Copilot, hidden fake
+system prompt, off-screen RAG poisoning), **0 of 4** legitimate ones (AI
+newsletter, Copilot tips for people, security training quoting "ignore
+previous instructions", receipt with a preheader). It is not measured on
+the public corpora because they predate the threat: the phishing is from
+2019–2025 and contains no AI-assistant injection (0 of 2,049), the ham from
+2002–2003. Both sets were written by the author of the rules.

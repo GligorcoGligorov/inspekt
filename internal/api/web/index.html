@@ -169,6 +169,15 @@ function render(rep) {
   else sigs.append(list);
 
   const cards = [top, sigs];
+  const inj = (rep.signals || []).find((s) => s.id === "ai_prompt_injection");
+  if (inj) {
+    const c = el("div", "card");
+    c.append(el("h2", null, "AI-assistant prompt injection (informational)"));
+    c.append(el("p", "hidden-note", "Text in this email is written for an AI assistant that reads the mailbox, not for the person. " +
+      "Shown for the analyst; it adds 0 points and does not change the verdict."));
+    for (const e of inj.evidence || []) c.append(el("blockquote", "hid", e));
+    cards.push(c);
+  }
   const hid = rep.hidden;
   if (hid) {
     const h = el("div", "card");
