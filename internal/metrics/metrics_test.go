@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
 )
 
@@ -94,5 +95,33 @@ func TestDashboardUsesDefinedMetrics(t *testing.T) {
 	}
 	if used == 0 {
 		t.Fatal("dashboard queries no inspekt metrics")
+	}
+}
+
+// Every known signal has a series at 0 from startup, so its first firing
+// shows up in increase() (Grafana's "Top signals" read 0 for signals that
+// had fired only once).
+func TestSignalSeriesStartAtZero(t *testing.T) {
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, mf := range mfs {
+		if mf.GetName() != "inspekt_signals_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "signal" {
+					have[l.GetValue()] = true
+				}
+			}
+		}
+	}
+	for _, id := range analyze.SignalIDs {
+		if !have[id] {
+			t.Errorf("no inspekt_signals_total series for %q at startup", id)
+		}
 	}
 }

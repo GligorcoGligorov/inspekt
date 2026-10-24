@@ -99,6 +99,9 @@ func init() {
 	for _, r := range []string{"ok", "error", "timeout", "rate_limited", "capped"} {
 		LLMCalls.WithLabelValues(r)
 	}
+	for _, id := range analyze.SignalIDs {
+		Signals.WithLabelValues(id)
+	}
 }
 
 // QueueCollector reports queue depth read from Redis at scrape time, so the
