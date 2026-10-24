@@ -3,6 +3,7 @@ package analyze
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -329,4 +330,104 @@ func (LureCheck) Run(in *Input) []Signal {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// HostingCheck flags links to free or commodity hosting that phishing kits
+// favour (IPFS gateways, object storage, serverless and static hosting, form
+// builders) when the message also asks for credentials or names a brand.
+// Neither half is enough alone: plenty of legitimate mail links to cloud
+// storage, and plenty mentions passwords. Designed on the dev split
+// (docs/EVAL.md): 23 % of missed phishing linked to such hosting.
+
+type HostingCheck struct{}
+
+func (HostingCheck) Name() string { return "hosting" }
+
+var (
+	// Registrable domains or host suffixes; matched against the full host.
+	abusableHosts = []struct{ suffix, kind string }{
+		{"ipfs.io", "IPFS gateway"}, {"dweb.link", "IPFS gateway"}, {"cloudflare-ipfs.com", "IPFS gateway"},
+		{"pinata.cloud", "IPFS gateway"}, {"w3s.link", "IPFS gateway"}, {"nftstorage.link", "IPFS gateway"},
+		{"fleek.co", "IPFS gateway"},
+		{"r2.dev", "object storage"}, {"storage.googleapis.com", "object storage"},
+		{"firebasestorage.googleapis.com", "object storage"}, {"blob.core.windows.net", "object storage"},
+		{"web.core.windows.net", "object storage"}, {"amazonaws.com", "object storage"},
+		{"digitaloceanspaces.com", "object storage"}, {"backblazeb2.com", "object storage"},
+		{"pages.dev", "serverless/static hosting"}, {"workers.dev", "serverless/static hosting"},
+		{"web.app", "serverless/static hosting"}, {"firebaseapp.com", "serverless/static hosting"},
+		{"glitch.me", "serverless/static hosting"}, {"netlify.app", "serverless/static hosting"},
+		{"vercel.app", "serverless/static hosting"}, {"herokuapp.com", "serverless/static hosting"},
+		{"onrender.com", "serverless/static hosting"}, {"repl.co", "serverless/static hosting"},
+		{"github.io", "serverless/static hosting"}, {"000webhostapp.com", "serverless/static hosting"},
+		{"weebly.com", "serverless/static hosting"}, {"wixsite.com", "serverless/static hosting"},
+		{"square.site", "serverless/static hosting"}, {"webflow.io", "serverless/static hosting"},
+	}
+	// Form builders and site builders on big platforms: host plus path prefix.
+	abusableForms = []struct{ host, prefix string }{
+		{"sites.google.com", ""}, {"forms.gle", ""}, {"docs.google.com", "/forms"},
+		{"forms.office.com", ""}, {"form.jotform.com", ""}, {"typeform.com", ""},
+	}
+	// An IPFS content path on any host: /ipfs/<CIDv0 Qm…> or /ipfs/<CIDv1 b…>.
+	// A plain "/ipfs/" is not enough (a 2002 newsletter linked to a software
+	// project called ipfs).
+	ipfsPath = regexp.MustCompile(`(?i)/ipfs/(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,})`)
+
+	credentialWords = regexp.MustCompile(`(?i)\b(password|passcode|sign[\s-]?in|log[\s-]?in|verif(y|ication)|mailbox|webmail|voicemail|account|invoice|document|shared|e-?sign\w*|payment|unlock|suspend\w*|expir\w*|deactivat\w*|quarantine\w*|storage (is )?full)\b`)
+	// Protected brands as words, optionally followed by digits ("office365";
+	// not "officer"). "live" is left out: it is an ordinary word.
+	brandWords = regexp.MustCompile(`(?i)\b(microsoft|office|outlook|paypal|apple|google|amazon|dhl|docusign|linkedin|dropbox|wetransfer|netflix|adobe)\d*\b`)
+	htmlTags   = regexp.MustCompile(`<[^>]*>`)
+)
+
+func hostingKind(l extract.Link) string {
+	if ipfsPath.MatchString(l.URL) {
+		return "IPFS content path"
+	}
+	for _, h := range abusableHosts {
+		if l.Host == h.suffix || strings.HasSuffix(l.Host, "."+h.suffix) {
+			return h.kind
+		}
+	}
+	if u, err := url.Parse(l.URL); err == nil {
+		for _, f := range abusableForms {
+			if (l.Host == f.host || strings.HasSuffix(l.Host, "."+f.host)) && strings.HasPrefix(u.Path, f.prefix) {
+				return "form/site builder"
+			}
+		}
+	}
+	return ""
+}
+
+func (HostingCheck) Run(in *Input) []Signal {
+	var hosted []extract.Link
+	var kinds []string
+	for _, l := range in.Links {
+		if k := hostingKind(l); k != "" {
+			hosted = append(hosted, l)
+			kinds = append(kinds, k)
+		}
+	}
+	if len(hosted) == 0 {
+		return nil
+	}
+	text := in.Msg.Subject + "\n" + in.Msg.TextBody + "\n" + htmlTags.ReplaceAllString(in.Msg.HTMLBody, " ")
+	why := ""
+	if m := credentialWords.FindString(text); m != "" {
+		why = fmt.Sprintf("credential wording %q", strings.ToLower(m))
+	} else if m := brandWords.FindString(text); m != "" {
+		why = fmt.Sprintf("names brand %q", strings.ToLower(m))
+	} else {
+		for _, l := range hosted {
+			if m := brandWords.FindString(l.URL); m != "" {
+				why = fmt.Sprintf("brand %q in the link", strings.ToLower(m))
+				break
+			}
+		}
+	}
+	if why == "" {
+		return nil
+	}
+	return []Signal{{ID: "abused_hosting_link", Severity: SevHigh, Score: 30,
+		Evidence: []string{fmt.Sprintf("links to %s (%s) and %s", hosted[0].Host, kinds[0], why)}}}
 }

@@ -135,7 +135,7 @@ type Report struct {
 
 // Version is reported in every result so verdicts can be tied to the rule
 // set that produced them.
-const Version = "inspekt-rules/0.2.0"
+const Version = "inspekt-rules/0.3.0"
 
 // Engine runs a fixed set of checks.
 type Engine struct {
@@ -168,6 +168,7 @@ func New(cfg Config) *Engine {
 		SenderCheck{},
 		LookalikeCheck{Protected: cfg.ProtectedDomains, brands: newBrands(cfg.ProtectedDomains)},
 		LinkCheck{},
+		HostingCheck{},
 		AttachmentCheck{},
 		LureCheck{},
 	}}

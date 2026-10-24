@@ -307,3 +307,51 @@ Known limits of the stage: answers vary from run to run (above); its grey zone s
 technical signal at all is never reviewed; names, company names and
 amounts are sent unmasked; the points mapping (≥ 0.8 → +30, ≥ 0.6 → +15) is a
 starting point to be set from data once real runs exist.
+
+## Recall work, 2026-10-24 (dev for design, holdout measured once)
+
+Rules: design and analysis use **only the dev split**
+(`evaluate.py --split dev`, which does not even compute holdout numbers);
+each check's design is frozen before **one** holdout measurement
+(`--split holdout`). A check is kept only if holdout recall improves and
+holdout FPR stays at or below 1 %. One check per commit.
+
+Starting point (`inspekt-rules/0.2.0`):
+
+| Split | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|
+| dev | 0.9083 | 0.1871 | 0.0092 | 307 / 31 / 3,326 / 1,334 |
+| holdout | 0.9205 | 0.1985 | 0.0088 | 81 / 7 / 786 / 327 |
+
+### Check 1: `abused_hosting_link` (+30), kept → `inspekt-rules/0.3.0`
+
+**Design (dev only).** Of 1,334 missed dev phishing messages, 309 (23 %)
+link to abusable hosting: IPFS gateways (134), object storage such as
+`r2.dev`, `storage.googleapis.com`, `blob.core.windows.net`, S3 (100),
+serverless/static hosting such as `pages.dev`, `workers.dev`, `web.app`,
+`glitch.me` (74), form/site builders (5). The host list follows known abuse
+categories rather than only the hosts seen in the misses. Hosting alone is
+not evidence (plenty of legitimate mail links to cloud storage), so the
+check also requires credential wording in the subject or body, or a
+protected brand named in the text or in the link; 265 of the 309 met that.
+Two refinements came from dev data before freezing: a 2002 newsletter
+linked to `freshmeat.net/projects/ipfs/`, so a bare `/ipfs/` path no longer
+counts (only a real IPFS content id does); and brand words may carry digits
+(`office365`, `microsoft365`) but not letters (`officer`).
+
+| Split | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|
+| dev before | 0.9083 | 0.1871 | 0.0092 | 307 / 31 / 3,326 / 1,334 |
+| dev after | 0.9489 | 0.3510 | 0.0092 | 576 / 31 / 3,326 / 1,065 |
+| holdout before | 0.9205 | 0.1985 | 0.0088 | 81 / 7 / 786 / 327 |
+| **holdout after** | **0.9500** | **0.3260** | **0.0088** | 133 / 7 / 786 / 275 |
+
+Kept: holdout recall +0.1275, no new false positive. Caveat, as before: the
+2002 ham predates every one of these services, so this corpus **cannot
+measure** the check's false-positive cost on modern mail (a SharePoint-like
+newsletter on `web.app` that says "account" would fire). The credential or
+brand condition is the mitigation; a modern ham corpus is the real test.
+
+All data after check 1: precision 0.9491, recall 0.3460, F1 0.5072, FPR
+0.0092 (709 / 38 / 4,112 / 1,340). CI subset (holdout): precision 0.9677,
+recall 0.30, FPR 0.01; its gate is raised to `--min-recall 0.30`.

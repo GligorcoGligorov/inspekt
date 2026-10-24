@@ -48,6 +48,8 @@ def load_labels(args) -> list[tuple[Path, str, str]]:
             root = Path(d)
             items += [(p, label, split_of(f"{label}/{p.relative_to(root)}"))
                       for p in sorted(root.rglob("*")) if p.is_file()]
+    if args.split:
+        items = [it for it in items if it[2] == args.split]
     if args.limit:
         items = items[: args.limit]
     return items
@@ -84,6 +86,9 @@ def main() -> int:
     ap.add_argument("--max-parse-errors", type=int, default=-1,
                     help="fail if more messages than this are rejected by the parser (-1: no limit)")
     ap.add_argument("--limit", type=int, default=0, help="evaluate only the first N messages")
+    ap.add_argument("--split", choices=["dev", "holdout"],
+                    help="evaluate only this split; design changes with --split dev, and measure "
+                         "holdout once, after the change is final")
     ap.add_argument("--out", help="write <out>.json and <out>.md")
     args = ap.parse_args()
 

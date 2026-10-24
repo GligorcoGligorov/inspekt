@@ -6,8 +6,8 @@ authentication and identity, and returns an **explainable verdict**: every
 point of the score is backed by a signal with evidence an analyst can read.
 
 Detection quality is measured, not assumed. On 6,202 public emails it is
-**precise but catches about one phishing message in five** (precision 0.91,
-recall 0.19, false-positive rate 0.9 %); [why, and what would fix
+**precise but catches about one phishing message in three** (precision 0.95,
+recall 0.35, false-positive rate 0.9 %); [why, and what would fix
 it](#detection-quality). The async pipeline sustained **868.1–980.9 scans/s**
 in load tests on a MacBook Air M3, with p95 end-to-end latency under 80 ms at
 32 clients.
@@ -144,18 +144,20 @@ intermediate result and the full analysis are in
 
 | Corpus | Ham | Phish | Precision | Recall | F1 | FPR |
 |---|---|---|---|---|---|---|
-| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9108 | 0.1894 | 0.3135 | 0.0092 |
-| — dev split (80 %) | 3,357 | 1,641 | 0.9083 | 0.1871 | | 0.0092 |
-| — holdout split (20 %) | 793 | 408 | 0.9205 | 0.1985 | | 0.0088 |
-| CI subset (holdout, fixed) | 100 | 100 | 0.9412 | 0.16 | | 0.01 |
+| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9491 | 0.3460 | 0.5072 | 0.0092 |
+| — dev split (80 %) | 3,357 | 1,641 | 0.9489 | 0.3510 | | 0.0092 |
+| — holdout split (20 %) | 793 | 408 | 0.9500 | 0.3260 | | 0.0088 |
+| CI subset (holdout, fixed) | 100 | 100 | 0.9677 | 0.30 | | 0.01 |
 | Sample (`testdata/`) | 2 | 5 | 1.00 | 0.80 | | 0.00 |
 
-**What this says.** The rules are precise (about 9 in 10 flags are right,
+**What this says.** The rules are precise (about 19 in 20 flags are right,
 under 1 % of legitimate mail is flagged) but catch **about one phishing
-message in five**. Most misses link to legitimate infrastructure that
-attackers abuse (IPFS gateways, Google, Cloudflare R2, Firebase,
-click-tracking redirects): nothing is structurally wrong, so a structural
-rule set cannot see them. That is the main thing to build next.
+message in three**. The largest group of misses linked to legitimate
+infrastructure attackers abuse (IPFS gateways, object storage, serverless
+hosting); the `abused_hosting_link` check, designed on the dev split and
+measured once on the holdout, raised holdout recall from 0.20 to 0.33 with
+no new false positives. Most remaining misses have nothing structurally
+wrong at all.
 
 **How it was measured.** A fixed 80/20 dev/holdout split by hash of the file
 path; changes were chosen on dev and kept only if holdout agreed. Two weights
@@ -168,7 +170,7 @@ crash in HTML link extraction on non-ASCII input (now fixed and fuzz-tested).
 **Gates.** CI fails if detection regresses: the 7 hand-made samples
 (`--min-recall 0.8 --max-fpr 0`; the one miss, `bec_reply_to.eml`, is a
 documented gap for the grey-zone LLM) and a fixed 200-message holdout subset
-of the public corpora (`--min-recall 0.16 --max-fpr 0.01`), rebuilt in CI
+of the public corpora (`--min-recall 0.30 --max-fpr 0.01`), rebuilt in CI
 from the pinned downloads because the SpamAssassin texts may not be
 redistributed. Both gates sit exactly at today's numbers, and parse errors
 fail them too.
@@ -305,7 +307,7 @@ define.
 
 ## Known limitations
 
-- **Recall is low (0.19)** on modern phishing that uses legitimate hosting;
+- **Recall is moderate (0.35)**: much modern phishing has nothing structurally wrong;
   see [What I'd do next](#what-id-do-next).
 - **The grey-zone LLM is measured only on 5 synthetic messages**, by
   design (the public corpora must not be sent to a provider). Its answers
@@ -340,14 +342,13 @@ define.
 
 In order of expected impact on the measured weaknesses:
 
-1. **Abusable-hosting signal**: links to IPFS gateways, `r2.dev`, `glitch.me`,
-   `web.app`, `workers.dev`, `pages.dev` and similar free hosting, combined
-   with credential wording or a brand name in the path. The largest group of
-   misses in `docs/EVAL.md`.
+1. **A modern ham corpus** for the abused-hosting check: the 2002 ham cannot
+   contain IPFS or serverless links, so its false-positive cost on today's
+   mail is unmeasured.
 2. **Open-redirect unwrapping**: run the link checks on the destination inside
    `google.com/url?q=`, `doubleclick.net` and ESP click links, without fetching.
-3. **A modern ham corpus** (with DMARC, shorteners, forwarding) to measure the
-   false-positive cost of authentication signals and settle the `p=none` risk.
+3. **The same modern ham corpus** (with DMARC, shorteners, forwarding) to measure
+   the false-positive cost of authentication signals and settle the `p=none` risk.
 4. **Alerts** on the existing metrics: dead letters above 0, pending growing,
    queue-wait p95 over a budget, a signal's share of clean mail jumping.
 5. **Measure the grey-zone LLM on more (and real, consented) BEC data**,

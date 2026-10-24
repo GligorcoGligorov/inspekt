@@ -331,3 +331,29 @@ func TestGreyZoneReview(t *testing.T) {
 		})
 	}
 }
+
+func TestHostingCheck(t *testing.T) {
+	cid := "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+	cases := []struct {
+		name, subject, body string
+		hit                 bool
+	}{
+		{"IPFS gateway + credential wording", "Mailbox full", "Release your messages: https://ipfs.io/ipfs/" + cid, true},
+		{"subdomain IPFS gateway", "Shared document", "Open: https://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi.ipfs.dweb.link/", true},
+		{"object storage + brand in link", "Hello", "See https://pub-1234.r2.dev/microsoft365/index.html", true},
+		{"static hosting + brand in text", "Your Adobe file", "https://files-view.pages.dev/", true},
+		{"Google Forms + credential wording", "Verify now", "https://docs.google.com/forms/d/e/1FAIpQLSf/viewform", true},
+		// Must NOT fire:
+		{"hosting without lure or brand", "Team photos", "Pictures from the offsite: https://pub-1234.r2.dev/offsite/", false},
+		{"credential wording without hosting", "Password reset", "Reset at https://www.example.org/reset", false},
+		{"project page called ipfs is not IPFS hosting", "Release notes", "Login fixes: http://freshmeat.net/projects/ipfs/", false},
+		{"Google Docs (not Forms)", "Shared document", "https://docs.google.com/document/d/abc/edit", false},
+	}
+	for _, c := range cases {
+		msg := &email.Message{Subject: c.subject, TextBody: c.body}
+		got := HostingCheck{}.Run(&Input{Msg: msg, Links: extract.Links(msg)})
+		if (len(got) == 1) != c.hit {
+			t.Errorf("%s: got %+v, want hit=%v", c.name, got, c.hit)
+		}
+	}
+}
