@@ -1,0 +1,15 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=techweekly.example; dkim=pass header.d=techweekly.example; dmarc=pass
+From: Tech Weekly <newsletter@techweekly.example>
+To: reader@example.org
+Subject: This week: how AI assistants read your inbox
+Date: Fri, 23 Oct 2026 08:00:00 +0000
+Message-ID: <tw-44@techweekly.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<div style="display:none;max-height:0;overflow:hidden">AI assistants, email security and the week's best tools. &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+<h2>How AI email assistants work</h2>
+<p>Assistants such as Copilot and Gemini summarise long threads, draft replies and find old attachments. Researchers have shown that hidden instructions in an email can mislead them, a problem known as prompt injection.</p>
+<p><a href="https://techweekly.example/ai-assistants">Read the full article</a></p>
+<img src="https://techweekly.example/open.gif" width="1" height="1" alt=""></body></html>

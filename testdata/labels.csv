@@ -1,5 +1,7 @@
 file,label,note
 clean_newsletter.eml,ham,
+newsletter_preheader.eml,ham,"zero-width-padded preheader, mso-hide, @media hiding, tracking pixel"
+receipt_tracking_pixel.eml,ham,hidden preheader and tracking pixel
 support_ticket_reply_to.eml,ham,helpdesk Reply-To on another domain; guards reply_to_mismatch FPs
 phish_lookalike.eml,phish,
 malware_attachment.eml,phish,

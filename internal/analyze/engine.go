@@ -53,6 +53,22 @@ const (
 type Input struct {
 	Msg   *email.Message
 	Links []extract.Link
+	// Content splits the HTML body into what a reader sees and what is
+	// hidden. Text is what content checks read: subject, plain-text body and
+	// the *visible* HTML text, with invisible characters removed, so hidden
+	// text can neither dilute nor fake wording.
+	Content extract.Content
+	Text    string
+}
+
+// newInput prepares what the checks read. extraZW counts invisible
+// characters in the subject and plain-text body (the HTML's are in Content).
+func newInput(msg *email.Message) (in *Input, extraZW int) {
+	in = &Input{Msg: msg, Links: extract.Links(msg), Content: extract.HTMLContent(msg.HTMLBody)}
+	plain, plainZW := extract.StripInvisible(msg.TextBody)
+	subject, subjectZW := extract.StripInvisible(msg.Subject)
+	in.Text = subject + "\n" + plain + "\n" + in.Content.Visible
+	return in, plainZW + subjectZW
 }
 
 // Check is one detection rule family.
@@ -131,11 +147,44 @@ type Report struct {
 	Links       []extract.Link     `json:"links"`
 	DurationsMS map[string]float64 `json:"durations_ms,omitempty"`
 	Engine      string             `json:"engine"`
+	// Hidden is what the message hides from its reader, shown to the
+	// analyst as evidence. Nil when nothing is hidden.
+	Hidden *HiddenSummary `json:"hidden,omitempty"`
+}
+
+// HiddenSummary is the hidden content of a message, capped for display.
+type HiddenSummary struct {
+	Runs      []extract.HiddenRun `json:"runs,omitempty"`
+	Chars     int                 `json:"chars"`      // letters and digits in all hidden text
+	ZeroWidth int                 `json:"zero_width"` // invisible characters, HTML + subject + plain text
+	Comments  string              `json:"comments,omitempty"`
+}
+
+const maxShownRuns, maxShownChars = 10, 300
+
+func hiddenSummary(c extract.Content, extraZW int) *HiddenSummary {
+	zw := c.ZeroWidth + extraZW
+	if len(c.Hidden) == 0 && zw == 0 && c.Comments == "" {
+		return nil
+	}
+	h := &HiddenSummary{Chars: c.HiddenChars, ZeroWidth: zw, Comments: shorten(c.Comments, maxShownChars)}
+	for _, r := range c.Hidden[:min(len(c.Hidden), maxShownRuns)] {
+		r.Text = shorten(r.Text, maxShownChars)
+		h.Runs = append(h.Runs, r)
+	}
+	return h
+}
+
+func shorten(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // Version is reported in every result so verdicts can be tied to the rule
 // set that produced them.
-const Version = "inspekt-rules/0.4.0"
+const Version = "inspekt-rules/0.5.0"
 
 // Engine runs a fixed set of checks.
 type Engine struct {
@@ -176,7 +225,7 @@ func New(cfg Config) *Engine {
 
 // Analyze runs all checks over msg.
 func (e *Engine) Analyze(msg *email.Message) *Report {
-	in := &Input{Msg: msg, Links: extract.Links(msg)}
+	in, extraZW := newInput(msg)
 	durations := map[string]float64{}
 
 	// QR links join the same list as every other link, so all link checks
@@ -232,6 +281,7 @@ func (e *Engine) Analyze(msg *email.Message) *Report {
 		Links:       in.Links,
 		DurationsMS: durations,
 		Engine:      Version,
+		Hidden:      hiddenSummary(in.Content, extraZW),
 	}
 }
 

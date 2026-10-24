@@ -1,0 +1,14 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=example.org; dkim=pass header.d=example.org; dmarc=pass
+From: IT Service Desk <it@example.org>
+To: staff@example.org
+Subject: Five Copilot tips for Monday
+Date: Fri, 23 Oct 2026 08:00:00 +0000
+Message-ID: <cp-tips@example.org>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Hi everyone,</p>
+<p>Some tips from the pilot group: ask Copilot to summarise a long thread before a meeting, ask it to draft a polite reply, and ask it to list the action items from the last project update.</p>
+<p>Please do not paste customer passwords or bank details into any AI tool.</p>
+<p>IT Service Desk</p></body></html>

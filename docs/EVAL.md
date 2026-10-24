@@ -417,3 +417,36 @@ the holdout was not consulted for it.
 Holdout FPR stayed at 0.88 % (7 of 793), under the 1 % limit; holdout
 recall nearly doubled. The holdout was measured exactly twice, once per
 check, after each design was frozen.
+
+## Hidden content and AI-assistant prompt injection (2026-10-24)
+
+Same discipline: designs use the dev split only; each change is measured
+once on the holdout after it is frozen; a signal is kept only if holdout
+recall improves and holdout FPR stays at or below 1 %.
+
+### Step 1: content checks read only visible text → `inspekt-rules/0.5.0`
+
+New `extract.HTMLContent` splits HTML into the text a reader sees and the
+text hidden by CSS, the `hidden` attribute, or invisible characters (see
+the README for what it understands and what it does not). `credential_lure`
+and `abused_hosting_link` now read subject + plain text + *visible* HTML
+text, instead of the raw HTML.
+
+Dev, message by message against `0.4.0`: 5 phishing messages gained
+`credential_lure` (their wording had been split by tags, e.g.
+`verify your <b>account</b>`); 2 lost `abused_hosting_link`, and in both the
+old match was markup, not content: `outlook` in a CSS selector
+(`body[data-outlook-cycle]`) and Outlook's conditional-comment XML
+(`<o:OfficeDocumentSettings>`). One of those two fell below the threshold.
+
+| Split | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|
+| dev before (`0.4.0`) | 0.9530 | 0.3833 | 0.0092 | 629 / 31 / 3,326 / 1,012 |
+| dev after | 0.9530 | 0.3827 | 0.0092 | 628 / 31 / 3,326 / 1,013 |
+| holdout before | 0.9565 | 0.3775 | 0.0088 | 154 / 7 / 786 / 254 |
+| **holdout after** | **0.9571** | **0.3824** | **0.0088** | 156 / 7 / 786 / 252 |
+
+Kept (this was a required change, not an optional signal): holdout +2
+detections, no new false positive; on dev, −1, from a match on markup.
+All data: precision 0.9538, recall 0.3826, FPR 0.0092. CI subset unchanged
+(recall 0.39, FPR 0.01).

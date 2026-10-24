@@ -1,0 +1,16 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=acme-tools.example; dkim=pass header.d=acme-tools.example; dmarc=pass
+From: Acme Tools <orders@acme-tools.example>
+To: customer@example.org
+Subject: Your order 10-2231 has shipped
+Date: Fri, 23 Oct 2026 08:00:00 +0000
+Message-ID: <ship-2231@acme-tools.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<span style="display:none;font-size:0;max-height:0;overflow:hidden">Tracking number inside. &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&n</span>
+<p>Hi Ana,</p><p>Good news: order 10-2231 (replacement charger) has shipped and should arrive on Tuesday.</p>
+<p><a href="https://acme-tools.example/orders/10-2231">Track your parcel</a></p>
+<p style="color:#777;font-size:12px">Acme Tools, 12 Example Street, Skopje</p>
+<img src="https://acme-tools.example/px/open.png?o=10-2231" width="1" height="1" style="width:1px;height:1px;border:0" alt="">
+</body></html>

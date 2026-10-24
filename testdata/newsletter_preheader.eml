@@ -1,0 +1,25 @@
+Authentication-Results: mx.inspekt.local; spf=pass smtp.mailfrom=example-shop.com; dkim=pass header.d=example-shop.com; dmarc=pass
+From: Example Shop <news@example-shop.com>
+To: reader@example.org
+Subject: Autumn sale: 20% off coats
+Date: Fri, 23 Oct 2026 08:00:00 +0000
+Message-ID: <nl-autumn@example-shop.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<!doctype html><html><head><style>
+.preheader{display:none!important;visibility:hidden;mso-hide:all;font-size:1px;color:#ffffff;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden}
+@media (max-width:600px){.desktop-only{display:none}}
+</style></head><body style="margin:0;background:#f4f4f4">
+<div class="preheader">Coats, boots and scarves: 20% off until Sunday. &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+<!--[if mso]><table width="600"><tr><td><![endif]-->
+<table width="100%" bgcolor="#f4f4f4"><tr><td>
+<h1 style="color:#222">Autumn sale</h1>
+<p style="color:#444">Everything in our coat collection is 20% off until Sunday.</p>
+<p class="desktop-only">Free delivery on orders over 50 EUR.</p>
+<table><tr><td bgcolor="#1a73e8" style="padding:12px"><a href="https://www.example-shop.com/sale" style="color:#ffffff;text-decoration:none">Shop the sale</a></td></tr></table>
+<p style="font-size:11px;color:#888">You receive this because you subscribed. <a href="https://www.example-shop.com/unsubscribe">Unsubscribe</a></p>
+</td></tr></table>
+<!--[if mso]></td></tr></table><![endif]-->
+<img src="https://t.example-shop.com/o.gif?u=8812" width="1" height="1" alt="" style="display:block;border:0">
+</body></html>

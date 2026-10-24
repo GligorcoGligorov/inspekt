@@ -56,6 +56,13 @@ ul.signals > li:first-child { border-top: 0; }
 .check { color: var(--muted); font-size: 13px; margin-left: 6px; }
 ul.ev { grid-column: 2; margin: 2px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .empty { color: var(--muted); }
+.hidden-note { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
+ul.hidden-runs { list-style: none; margin: 0; padding: 0; }
+ul.hidden-runs > li { border-top: 1px solid var(--border); padding: 8px 0; }
+ul.hidden-runs > li:first-child { border-top: 0; }
+.why { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--suspicious); }
+blockquote.hid { margin: 4px 0 0; padding: 6px 10px; border-left: 3px solid var(--suspicious);
+  background: var(--suspicious-bg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
@@ -161,7 +168,29 @@ function render(rep) {
   if (!list.children.length) sigs.append(el("p", "empty", "No signals: nothing in this message matched a rule."));
   else sigs.append(list);
 
-  result.replaceChildren(top, sigs);
+  const cards = [top, sigs];
+  const hid = rep.hidden;
+  if (hid) {
+    const h = el("div", "card");
+    h.append(el("h2", null, "Hidden from the reader"));
+    h.append(el("p", "hidden-note", hid.chars + " hidden letters/digits, " + hid.zero_width +
+      " invisible characters. This text is in the email but a person reading it would not see it."));
+    const runs = el("ul", "hidden-runs");
+    for (const r of hid.runs || []) {
+      const li = el("li");
+      li.append(el("span", "why", r.reason + (r.visible_before === 0 ? " (before any visible text)" : "")));
+      li.append(el("blockquote", "hid", r.text));
+      runs.append(li);
+    }
+    if (hid.comments) {
+      const li = el("li");
+      li.append(el("span", "why", "HTML comment"), el("blockquote", "hid", hid.comments));
+      runs.append(li);
+    }
+    if (runs.children.length) h.append(runs);
+    cards.push(h);
+  }
+  result.replaceChildren(...cards);
   result.hidden = false;
 }
 

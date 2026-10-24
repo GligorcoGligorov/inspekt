@@ -350,8 +350,8 @@ func TestHostingCheck(t *testing.T) {
 		{"Google Docs (not Forms)", "Shared document", "https://docs.google.com/document/d/abc/edit", false},
 	}
 	for _, c := range cases {
-		msg := &email.Message{Subject: c.subject, TextBody: c.body}
-		got := HostingCheck{}.Run(&Input{Msg: msg, Links: extract.Links(msg)})
+		in, _ := newInput(&email.Message{Subject: c.subject, TextBody: c.body})
+		got := HostingCheck{}.Run(in)
 		if (len(got) == 1) != c.hit {
 			t.Errorf("%s: got %+v, want hit=%v", c.name, got, c.hit)
 		}
@@ -383,5 +383,30 @@ func TestBrandDisplayName(t *testing.T) {
 		if _, ok := brandDisplayName(addr, bs); ok != c.hit {
 			t.Errorf("%q <%s>: hit=%v, want %v", c.name, c.email, ok, c.hit)
 		}
+	}
+}
+
+// The report carries what was hidden, and content checks read only what a
+// reader sees: hidden lure wording no longer counts, and wording split by
+// tags or invisible characters is found.
+func TestVisibleTextAndHiddenSummary(t *testing.T) {
+	eng := New(DefaultConfig)
+	hiddenLure := eng.Analyze(&email.Message{HTMLBody: `<p>Monthly update: <a href="https://x.example/">read</a></p>` +
+		`<div style="display:none">verify your account</div>`})
+	if _, ok := signalByID(hiddenLure, "credential_lure"); ok {
+		t.Error("lure wording that only exists in hidden text was counted")
+	}
+	if hiddenLure.Hidden == nil || len(hiddenLure.Hidden.Runs) != 1 || hiddenLure.Hidden.Runs[0].Reason != "display:none" {
+		t.Errorf("hidden summary %+v", hiddenLure.Hidden)
+	}
+	split := eng.Analyze(&email.Message{HTMLBody: "<p>Please ver​ify your <b>account</b>: <a href=\"https://x.example/\">here</a></p>"})
+	if _, ok := signalByID(split, "credential_lure"); !ok {
+		t.Errorf("wording split by a tag and a zero-width space was missed: %+v", split.Signals)
+	}
+	if split.Hidden == nil || split.Hidden.ZeroWidth != 1 {
+		t.Errorf("zero-width count %+v", split.Hidden)
+	}
+	if clean := eng.Analyze(&email.Message{HTMLBody: "<p>Hello</p>"}); clean.Hidden != nil {
+		t.Errorf("nothing hidden, but summary %+v", clean.Hidden)
 	}
 }

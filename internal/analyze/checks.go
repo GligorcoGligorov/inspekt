@@ -357,7 +357,7 @@ func (LureCheck) Run(in *Input) []Signal {
 	if len(in.Links) == 0 {
 		return nil
 	}
-	body := strings.ToLower(in.Msg.Subject + " " + in.Msg.TextBody + " " + in.Msg.HTMLBody)
+	body := strings.ToLower(in.Text)
 	for _, p := range lurePhrases {
 		if strings.Contains(body, p) {
 			return []Signal{{ID: "credential_lure", Severity: SevLow, Score: 10,
@@ -412,7 +412,6 @@ var (
 	// Protected brands as words, optionally followed by digits ("office365";
 	// not "officer"). "live" is left out: it is an ordinary word.
 	brandWords = regexp.MustCompile(`(?i)\b(microsoft|office|outlook|paypal|apple|google|amazon|dhl|docusign|linkedin|dropbox|wetransfer|netflix|adobe)\d*\b`)
-	htmlTags   = regexp.MustCompile(`<[^>]*>`)
 )
 
 func hostingKind(l extract.Link) string {
@@ -448,7 +447,7 @@ func (HostingCheck) Run(in *Input) []Signal {
 	if len(hosted) == 0 {
 		return nil
 	}
-	text := in.Msg.Subject + "\n" + in.Msg.TextBody + "\n" + htmlTags.ReplaceAllString(in.Msg.HTMLBody, " ")
+	text := in.Text
 	why := ""
 	if m := credentialWords.FindString(text); m != "" {
 		why = fmt.Sprintf("credential wording %q", strings.ToLower(m))
