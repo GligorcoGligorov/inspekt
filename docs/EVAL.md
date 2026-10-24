@@ -511,3 +511,53 @@ conservative +20 it adds **0** dev detections (those messages score too low
 otherwise); at +30 it adds 3, which is too little evidence to justify
 raising a weight. Dropped without consulting the holdout, which stays
 reserved for changes that help on dev.
+
+### Step 4: `ai_prompt_injection`, not kept as a scored signal
+
+**Design.** Text written for an AI assistant reading the mailbox: in hidden
+text or HTML comments, an instruction override ("ignore previous
+instructions", "system prompt", "developer mode"), an assistant addressed
+together with an action (forward, reveal or include secrets, tell the user,
+conceal), or a markdown image whose URL carries data (EchoLeak); in
+visible text, only an assistant addressed by name at the start of a line
+("Copilot, …") together with an override or a data demand, so that text
+*about* prompt injection (security training, AI newsletters) does not
+count. The first smoke run missed the visible case because the visible
+text had lost its line breaks; keeping one line per block element fixed
+that.
+
+**Real data.** The signal fired on **0 of 1,641 dev and 0 of 408 holdout
+phishing messages**, and on no ham: the 2019–2025 Nazario phishing does not
+contain AI-assistant prompt injection, so this corpus cannot measure the
+signal at all. The line-break change, measured with it once on the
+holdout, gained one dev detection (`abused_hosting_link`, words no longer
+glued across table cells) and lost one holdout detection (recall 0.3922 →
+0.3897). Per the rule, both were dropped and the code reverted; rules stay
+at `0.6.0`.
+
+**Synthetic smoke test** (`make eval-injection`, `testdata/injection/`,
+written by the same author as the rule, so not a measurement): the frozen
+detector flagged **5 of 5** injection emails (hidden instruction with
+markdown-image exfiltration, comment telling an assistant to forward mail,
+visible instruction to Copilot, hidden fake system prompt, off-screen RAG
+poisoning) and **0 of 4** legitimate ones (AI newsletter, Copilot tips for
+people, security training quoting "ignore previous instructions", receipt
+with a preheader). With the signal dropped, the shipped rules flag none of
+the 5 by their AI content; the hidden instructions are still visible to an
+analyst in the report's hidden-content section and on the demo page.
+
+### Hidden content in the corpus
+
+Counted with the final extractor over the whole corpus (descriptive, after
+all designs were frozen):
+
+| | Phishing (2,049 scanned) | Ham (4,150 scanned) |
+|---|---|---|
+| Any hidden text (preheaders included) | **284 (13.9 %)** | 2 (0.05 %) |
+| Hidden text beyond a short preheader | 219 | 2 |
+| Invisible characters (zero-width etc.) | 109 | 0 |
+| `hidden_text_salting` fired | 56 | 0 |
+
+The ham column is weak evidence for the usual reason: the 2002 ham is mostly
+plain text, with little HTML to hide anything in. Modern legitimate mail
+hides preview text routinely; the `testdata/` newsletters cover that case.
