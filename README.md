@@ -14,11 +14,11 @@ if it regresses.
 
 | Headline | Result |
 |---|---|
-| Precision / recall / FPR, 6,202 public emails (rules `0.4.0`) | **0.9537 / 0.3821 / 0.0092** |
-| Same, on the 20 % holdout never used for design | 0.9565 / 0.3775 / 0.0088 |
-| Recall before the latest two checks (holdout) | 0.1985 → **0.3775**, no new false positives |
+| Precision / recall / FPR, 6,202 public emails (rules `0.6.0`) | **0.9551 / 0.3943 / 0.0092** |
+| Same, on the 20 % holdout never used for design | 0.9581 / 0.3922 / 0.0088 |
+| Holdout recall since the first public-corpus run | 0.1985 → **0.3922**, no new false positives |
 | Full Docker stack throughput, MacBook Air M3 | **868.1–1,019.6 scans/s** across load runs; end-to-end p95 64.2 ms at 32 clients (rules `0.4.0`) |
-| Analysis of a typical message | 6,654–17,220 ns (single core) |
+| Analysis of a typical message | 7,062–21,809 ns (single core, rules `0.6.0`) |
 
 Honest reading: it is precise (about 19 in 20 flags are right) but catches
 about **one phishing email in three**; most of what it misses has nothing
@@ -175,20 +175,21 @@ intermediate result and the full analysis are in
 
 | Corpus | Ham | Phish | Precision | Recall | F1 | FPR |
 |---|---|---|---|---|---|---|
-| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9537 | 0.3821 | 0.5456 | 0.0092 |
-| — dev split (80 %) | 3,357 | 1,641 | 0.9530 | 0.3833 | | 0.0092 |
-| — holdout split (20 %) | 793 | 408 | 0.9565 | 0.3775 | | 0.0088 |
-| CI subset (holdout, fixed) | 100 | 100 | 0.9750 | 0.39 | | 0.01 |
-| Sample (`testdata/`) | 2 | 5 | 1.00 | 0.80 | | 0.00 |
+| Public: SpamAssassin ham 2002–03 + Nazario phishing 2019–25 | 4,150 | 2,049 (+3 unparseable) | 0.9551 | 0.3943 | 0.5582 | 0.0092 |
+| — dev split (80 %) | 3,357 | 1,641 | 0.9543 | 0.3949 | | 0.0092 |
+| — holdout split (20 %) | 793 | 408 | 0.9581 | 0.3922 | | 0.0088 |
+| CI subset (holdout, fixed) | 100 | 100 | 0.9762 | 0.41 | | 0.01 |
+| Sample (`testdata/`) | 4 | 5 | 1.00 | 0.80 | | 0.00 |
 
 **What this says.** The rules are precise (about 19 in 20 flags are right,
 under 1 % of legitimate mail is flagged) but catch **about one phishing
 message in three**. The largest group of misses linked to legitimate
 infrastructure attackers abuse (IPFS gateways, object storage, serverless
-hosting) or claimed a brand in the sender name. Two checks designed on the
-dev split and each measured once on the holdout (`abused_hosting_link`,
-`brand_display_name`) raised holdout recall from 0.20 to 0.38 with no new
-false positives. Most remaining misses have nothing structurally wrong.
+hosting) or claimed a brand in the sender name. Checks designed on the dev
+split and each measured once on the holdout (`abused_hosting_link`,
+`brand_display_name`, reading only visible text, `hidden_text_salting`)
+raised holdout recall from 0.1985 to 0.3922 with no new false positives.
+Most remaining misses have nothing structurally wrong.
 
 **How it was measured.** A fixed 80/20 dev/holdout split by hash of the file
 path; changes were chosen on dev and kept only if holdout agreed. Two weights
@@ -214,9 +215,9 @@ MacBook Air 13" M3 (2024), 8 GB RAM.
 | Measure | Result |
 |---|---|
 | Parse a typical message | 3,401–9,121 ns (119.7–176.3 MB/s) |
-| Analyse a typical message | 6,654–17,220 ns (rules `0.4.0`) |
-| Analyse with a QR code to decode | 338,518 ns |
-| Analyse a 300-link newsletter | 683,667 ns (1,879,144 ns before profiling; 474,789 ns on rules `0.2.0`) |
+| Analyse a typical message | 7,062–21,809 ns (rules `0.6.0`; 6,654–17,220 on `0.4.0`) |
+| Analyse with a QR code to decode | 318,706 ns |
+| Analyse a 300-link newsletter | 820,625 ns on `0.6.0` (683,667 on `0.4.0`; 474,789 on `0.2.0`; 1,879,144 before profiling) |
 | CLI over the public corpus | 2,018.0–2,176.9 messages/s, one process |
 | Full Docker stack, 32 clients, real corpus mix | 868.1 scans/s on `0.2.0`, 1,019.6 on `0.4.0`; end-to-end p95 78.4 / 64.2 ms |
 | Full Docker stack, 64 clients, polling every 50 ms | 980.9 scans/s; end-to-end p95 116.2 ms (rules `0.2.0`) |
@@ -279,6 +280,56 @@ INSPEKT_LLM_ENABLED=true docker compose up -d
   temperature 0, and one BEC message was caught only marginally; see
   [`docs/EVAL.md`](docs/EVAL.md#grey-zone-llm-on-the-bec-set). Five
   hand-written messages are a mechanism check, not a precision estimate.
+
+## Hidden content and AI-assistant prompt injection
+
+**The threat.** Phishing hides text in its own HTML: with CSS
+(`font-size:0`, `display:none`, `opacity:0`, white-on-white, off-screen
+positioning, clipping) or invisible Unicode. Cisco Talos calls this
+[hidden text salting](https://blog.talosintelligence.com/seasoning-email-threats-with-hidden-text-salting/)
+([CSS abuse](https://blog.talosintelligence.com/css-abuse-for-evasion-and-tracking/),
+[follow-up](https://blog.talosintelligence.com/too-salty-to-handle-exposing-cases-of-css-abuse-for-hidden-text-salting/)):
+the reader sees one email, a content filter (or an LLM-based defence) reads
+another. The same trick carries prompt injection aimed at AI email
+assistants: [EchoLeak](https://arxiv.org/abs/2509.10540) (CVE-2025-32711)
+was a zero-click exploit in which one crafted email made Microsoft 365
+Copilot leak data through an auto-fetched markdown image.
+
+**What Inspekt does.**
+
+- `extract.HTMLContent` splits each HTML body into the text a reader sees
+  and the text that is hidden, with the reason (inline styles, simple
+  `<style>` rules, the `hidden` attribute, colour matching a declared
+  background), plus invisible characters and HTML comments. It streams the
+  HTML (no DOM), has hard limits, and is fuzz-tested in CI.
+- Content checks (lure wording, brand mentions) read **only the visible
+  text**, so salting can neither dilute nor fake them.
+- Every report has a `hidden` section, and the demo page shows it under
+  "Hidden from the reader": exactly what was in the email that a person
+  could not see, rendered as plain text.
+- `hidden_text_salting` (+20, never decisive alone): at least as much
+  hidden as visible text, beyond a short preheader.
+
+**Measured** (design on the dev split, one holdout measurement each; all
+in [`docs/EVAL.md`](docs/EVAL.md)):
+
+| | Result |
+|---|---|
+| Corpus phishing with hidden text | **284 of 2,049 (13.9 %)**; ham: 2 of 4,150 |
+| Reading only visible text | holdout recall 0.3775 → 0.3824, FPR unchanged |
+| `hidden_text_salting` | holdout recall 0.3824 → 0.3922, FPR unchanged (0.88 %) |
+| `hidden_brand_mismatch` | **dropped**: on dev, 7 of 8 hits were Microsoft Word markup in comments; 0 gain at a conservative weight |
+| `ai_prompt_injection` | **dropped**: fired on 0 of 2,049 corpus phishing emails, so it could not be measured; on the synthetic set it flagged 5 of 5 injection emails and 0 of 4 legitimate ones (smoke test, not a measurement) |
+
+**Limits.** Not a CSS engine: descendant selectors, external stylesheets,
+computed layout and text inside images count as visible. White text is
+hidden only against a background the email declares; image and gradient
+backgrounds are "unknown". A short preheader before the body never counts
+(legitimate newsletters use them, and `testdata/` has two). The 2002 ham is
+mostly plain text, so the false-positive cost on modern HTML mail is not
+measured. And there is no AI-injection signal in the shipped rules: hidden
+instructions appear in the report's hidden section for the analyst, but
+nothing scores them until real data can measure a detector.
 
 ## Observability
 

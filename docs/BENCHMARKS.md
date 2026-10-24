@@ -134,3 +134,26 @@ Load run B again (corpus mix, 5,000 messages, 32 clients, polling every
 10 ms) on `0.4.0`: **1,019.6 scans/s**, accept p95 4.8 ms, end-to-end p50
 25.7 / p95 64.2 / p99 91.3 ms, 0 rejected, 0 failed. That is within the
 spread of earlier runs (868.1–980.9 scans/s on `0.2.0`); runs vary.
+
+## Re-measured on rules `0.6.0` (2026-10-24)
+
+Hidden-content extraction parses every HTML body with a streaming
+tokenizer (`golang.org/x/net/html`), and the content checks read the
+extracted visible text.
+
+| Analyze (ns/op) | `0.4.0` | `0.6.0` |
+|---|---|---|
+| bec_reply_to | 6,654 | 7,062 |
+| malware_attachment | 7,281 | 7,663 |
+| ip_link_mailbox | 9,666 | 12,085 |
+| phish_lookalike | 12,332 | 15,605 |
+| clean_newsletter | 15,774 | 17,482 |
+| support_ticket_reply_to | 17,220 | 20,803 |
+| qr_phish | 338,518 | 318,706 |
+| newsletter_300_links | 683,667 | 820,625 |
+| receipt_tracking_pixel (new) | | 21,809 |
+| newsletter_preheader (new) | | 47,485 |
+
+HTML-heavy messages cost 11–27 % more; the 300-link stress case 20 %
+more. The CLI over the public corpus ran at 2,135.7 messages/s on `0.6.0`,
+inside the earlier 2,018.0–2,176.9 range.

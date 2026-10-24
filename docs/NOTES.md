@@ -737,3 +737,79 @@ finished on the rules. That is the fallback doing its job.
    limit across many workers is how you stay rate-limited. A metric counts
    `rate_limited`, so if it happens often the dashboard shows it and I lower
    the per-minute cap.
+
+---
+
+## Hidden content and AI-assistant prompt injection
+
+### The idea
+
+An email has two audiences: the person, who sees the rendered page, and
+the machines (spam filters, and now AI assistants), which read the HTML.
+Attackers exploit the difference. With CSS (`font-size:0`, `display:none`,
+white text on a white background, text pushed off-screen) or invisible
+characters, they put text in the email that the person never sees:
+random words to confuse filters ("hidden text salting", Cisco Talos), or
+instructions for an AI assistant that will later summarise the mailbox
+(prompt injection, as in EchoLeak against Microsoft 365 Copilot).
+
+### What we built
+
+- A step that reads the HTML like a browser would, just enough to know
+  what is visible: inline styles, simple `<style>` rules, the `hidden`
+  attribute, colours, invisible characters, comments. It streams the HTML
+  instead of building a tree, and has hard limits, because the HTML is
+  written by the attacker.
+- The existing wording checks now read **only what the person sees**.
+  This found something unexpected: two old detections had matched words
+  inside CSS and Outlook markup, not the message.
+- The report and the demo page show everything hidden, so an analyst sees
+  what the person could not.
+- One new signal, `hidden_text_salting`: more hidden text than visible,
+  ignoring the short hidden "preview line" (preheader) that legitimate
+  newsletters use.
+
+### What we dropped, and why that is the point
+
+- `hidden_brand_mismatch`: the data showed almost every hit was Microsoft
+  Word's XML namespace in a comment, markup, not an attack.
+- `ai_prompt_injection`: it worked on our five synthetic attacks without
+  flagging the four tricky legitimate emails, but it fired on **zero** of
+  2,049 real phishing emails. With no real examples, it cannot be measured,
+  so it does not get to change verdicts. The hidden instructions are still
+  shown to the analyst.
+
+13.9 % of the real phishing emails contain hidden text, against almost none
+of the (old, mostly plain-text) legitimate ones.
+
+### Interview questions
+
+1. **"How do you decide what text is 'hidden' without a browser?"**
+   I approximate the parts of CSS attackers actually use: inline styles,
+   simple class/id/tag rules, the hidden attribute, and colour versus the
+   background the email declares. I deliberately do not guess: white text
+   with no declared background, or on a background image, counts as
+   visible. That choice cost some detections on the dev data, but the one
+   false hit it removed (a 2002 newsletter with white headings on an image)
+   is exactly what modern newsletters look like. The limits (no descendant
+   selectors, no external CSS, no layout) are written down.
+
+2. **"Legitimate emails hide text too. How do you avoid flagging them?"**
+   The common case is the preheader: a short hidden preview line before
+   the body, often padded with invisible characters. A single short hidden
+   run before any visible text never counts, and the salting signal needs
+   hidden text to outweigh visible text. I added two realistic newsletters
+   with preheaders, padding and tracking pixels as regression tests. The
+   honest caveat is that my legitimate corpus is from 2002, so the
+   false-positive cost on modern HTML mail is not measured yet.
+
+3. **"You built an AI prompt-injection detector and then turned it off.
+   Why?"**
+   Because I could not measure it. It caught 5 of 5 synthetic attacks and
+   none of 4 hard legitimate emails, but I wrote both sets, and it fired on
+   zero real phishing emails. A detector that changes verdicts needs
+   evidence about its false positives on real mail; until then it should
+   not cost anyone a delivered email. The threat is real, so the hidden
+   content is shown to analysts, and with a corpus containing real
+   injection attempts (or opt-in production samples) the detector can be
+   measured and switched on the same way the other checks were.
