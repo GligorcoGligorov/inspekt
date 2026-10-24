@@ -489,3 +489,25 @@ commit changed nothing else on dev.
 Kept: holdout +4 detections, no new false positive. All data: precision
 0.9551, recall 0.3943, F1 0.5582, FPR 0.0092. CI subset: precision 0.9762,
 recall 0.41, FPR 0.01; gate raised to `--min-recall 0.41`.
+
+### Step 3: `hidden_brand_mismatch`, not kept (dropped on dev data)
+
+Two candidate definitions on the dev split: (a) a protected brand named
+only in hidden text (or comments), not in what the reader sees, from a
+sender that is not that brand; (b) a brand the reader sees that a naive
+filter reading all text would not find, because hidden spans or invisible
+characters split the word.
+
+| Candidate (dev) | Missed phish | Caught phish | Ham |
+|---|---|---|---|
+| (a) brand only in hidden text or comments | 8 | 9 | 1 |
+| (b) visible brand split by hidden content | 2 | 0 | 0 |
+
+The ham hit and **7 of the 8 missed phish** had the "hidden brand" only
+in an HTML comment: Microsoft Word's XML namespace
+(`urn:schemas-microsoft-com:office:office`), markup rather than text aimed
+at anyone. Without comments, the signal covers 3 dev messages. At a
+conservative +20 it adds **0** dev detections (those messages score too low
+otherwise); at +30 it adds 3, which is too little evidence to justify
+raising a weight. Dropped without consulting the holdout, which stays
+reserved for changes that help on dev.
