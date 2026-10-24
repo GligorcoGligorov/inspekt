@@ -1,16 +1,38 @@
 # Inspekt
 
-An email threat-analysis service in Go. Inspekt parses raw messages, extracts
-artifacts (links, forms, attachments, QR codes in images), checks sender
-authentication and identity, and returns an **explainable verdict**: every
-point of the score is backed by a signal with evidence an analyst can read.
+**An email threat-analysis service in Go that explains every verdict and
+measures its own accuracy.** Inspekt parses raw email as hostile input,
+extracts links (including ones hidden in QR-code images), verifies SPF,
+DKIM and DMARC itself, and scores the message with small, independent
+rules; every point of the score comes with evidence an analyst can read.
+Behind the API sits a crash-safe Redis Streams pipeline (at-least-once,
+watchdog, dead-letter queue, backpressure) with results in MariaDB,
+Prometheus metrics and a Grafana dashboard. An optional LLM gives a second
+opinion only on messages the rules cannot decide, and can only add points.
+Detection is measured on public corpora with a held-out split, and CI fails
+if it regresses.
 
-Detection quality is measured, not assumed. On 6,202 public emails it is
-**precise but catches about one phishing message in three** (precision 0.95,
-recall 0.38, false-positive rate 0.9 %); [why, and what would fix
-it](#detection-quality). The async pipeline sustained **868.1–980.9 scans/s**
-in load tests on a MacBook Air M3, with p95 end-to-end latency under 80 ms at
-32 clients.
+| Headline | Result |
+|---|---|
+| Precision / recall / FPR, 6,202 public emails (rules `0.4.0`) | **0.9537 / 0.3821 / 0.0092** |
+| Same, on the 20 % holdout never used for design | 0.9565 / 0.3775 / 0.0088 |
+| Recall before the latest two checks (holdout) | 0.1985 → **0.3775**, no new false positives |
+| Full Docker stack throughput, MacBook Air M3 | **868.1–1,019.6 scans/s** across load runs; end-to-end p95 64.2 ms at 32 clients (rules `0.4.0`) |
+| Analysis of a typical message | 6,654–17,220 ns (single core) |
+
+Honest reading: it is precise (about 19 in 20 flags are right) but catches
+about **one phishing email in three**; most of what it misses has nothing
+structurally wrong. [Details](#detection-quality) and
+[`docs/EVAL.md`](docs/EVAL.md) have every number, including the ones that
+are not flattering.
+
+![Demo page: a phishing email with every signal and its evidence](docs/img/demo.png)
+
+*The demo page at `/`: drop an `.eml`, get the verdict and the evidence.*
+
+![Grafana dashboard during a load test](docs/img/grafana.png)
+
+*The Grafana dashboard during a load test (see [Observability](#observability)).*
 
 ```
 $ inspekt scan testdata/phish_lookalike.eml
@@ -23,10 +45,29 @@ testdata/phish_lookalike.eml
   [high   +35] link_text_mismatch: [shows "https://account.microsoft.com/security", goes to login-micros0ft.com]
   [high   +30] display_name_spoof: [display name shows security@microsoft.com, real sender is alerts@micros0ft-support.com]
   [high   +30] lookalike_sender: [micros0ft-support.com imitates microsoft.com (embedded)]
+  [high   +30] brand_display_name: [display name "Microsoft account team <security@microsoft.com>" claims microsoft.com, sender domain is micros0ft-support.com]
   [high   +30] lookalike_link: [login-micros0ft.com imitates microsoft.com (embedded)]
-  [medium +20] reply_to_mismatch: [From micros0ft-support.com, replies go to gmail-recovery.net]
   ...
 ```
+
+### How I built this
+
+I built Inspekt with [Claude Code](https://claude.com/claude-code) as the
+implementation partner. I wrote the plan
+([`docs/WEEKEND_PLAN.md`](docs/WEEKEND_PLAN.md): which steps, in which
+order, and the rules) and made the decisions that were mine to make: the
+order of the steps, the LLM provider and what data may leave the system,
+that the public corpora must never be sent to an LLM, that the LLM stays
+off unless explicitly enabled, and that numbers are reported as measured.
+Claude Code wrote the code, tests and docs step by step under fixed rules:
+every step ends with green tests and its own commit, CI must pass on
+GitHub before the next step, bugs are fixed in separate commits with a test
+that fails on the old code, weights change only with an evaluation run
+(decided on the dev split, confirmed once on the holdout), and nothing is
+rounded up. Each step is explained in plain language, with interview
+questions, in [`docs/NOTES.md`](docs/NOTES.md), which is how I worked
+through and checked what was built. The commit history shows the order,
+including the bugs the evaluation and load tests found.
 
 ## Quick start
 
@@ -184,12 +225,12 @@ MacBook Air 13" M3 (2024), 8 GB RAM.
 | Measure | Result |
 |---|---|
 | Parse a typical message | 3,401–9,121 ns (119.7–176.3 MB/s) |
-| Analyse a typical message | 6,265–15,009 ns |
-| Analyse with a QR code to decode | 327,596 ns |
-| Analyse a 300-link newsletter | 474,789 ns (1,879,144 ns before profiling) |
+| Analyse a typical message | 6,654–17,220 ns (rules `0.4.0`) |
+| Analyse with a QR code to decode | 338,518 ns |
+| Analyse a 300-link newsletter | 683,667 ns (1,879,144 ns before profiling; 474,789 ns on rules `0.2.0`) |
 | CLI over the public corpus | 2,018.0–2,176.9 messages/s, one process |
-| Full Docker stack, 32 clients, real corpus mix | 868.1 scans/s; end-to-end p50 28.3 ms, p95 78.4 ms, p99 149.7 ms |
-| Full Docker stack, 64 clients, polling every 50 ms | 980.9 scans/s; end-to-end p95 116.2 ms |
+| Full Docker stack, 32 clients, real corpus mix | 868.1 scans/s on `0.2.0`, 1,019.6 on `0.4.0`; end-to-end p95 78.4 / 64.2 ms |
+| Full Docker stack, 64 clients, polling every 50 ms | 980.9 scans/s; end-to-end p95 116.2 ms (rules `0.2.0`) |
 
 Profiling with `pprof` showed ~91 % of the engine's allocations in the
 lookalike check (protected-brand forms re-derived for every link); fixing it
@@ -257,12 +298,10 @@ docker compose --profile observability up -d --build   # adds Prometheus and Gra
 open http://localhost:3000                             # dashboard "Inspekt" (anonymous read-only)
 ```
 
-![Grafana dashboard during a load test](docs/img/grafana.png)
-
-*Taken during a load run (8 clients, real corpus mix plus samples, polling
-every 50 ms) on the MacBook Air. The p99 queue-wait rise at the right edge
-coincides with restarting Grafana and rendering this screenshot on the same
-laptop.*
+The dashboard screenshot at the top was taken during a load run (8
+clients, real corpus mix plus samples, polling every 50 ms) on the MacBook
+Air. The p99 queue-wait rise at its right edge coincides with restarting
+Grafana and rendering the screenshot on the same laptop.
 
 | Metric | Type | From | What it answers |
 |---|---|---|---|

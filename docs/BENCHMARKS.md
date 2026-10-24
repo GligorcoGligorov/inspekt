@@ -107,3 +107,30 @@ took gap locks that collided with other workers' inserts. Nothing was lost
 terrible. Fixed in `fb3f414` (no DELETE for new scans, retry on 1213/1205)
 with a 200-way concurrent-save test that failed on the old code. The
 numbers above are after the fix.
+
+## Re-measured on rules `0.4.0` (2026-10-24)
+
+The two recall checks added that day (`abused_hosting_link`,
+`brand_display_name`) do more work per link and per message. Same
+machine, same commands:
+
+| Analyze (ns/op) | `0.2.0` | `0.4.0` |
+|---|---|---|
+| bec_reply_to | 6,265 | 6,654 |
+| malware_attachment | 6,752 | 7,281 |
+| ip_link_mailbox | 8,428 | 9,666 |
+| phish_lookalike | 11,073 | 12,332 |
+| clean_newsletter | 12,783 | 15,774 |
+| support_ticket_reply_to | 15,009 | 17,220 |
+| qr_phish | 327,596 | 338,518 |
+| newsletter_300_links | 474,789 | 683,667 |
+
+Typical mail costs 5–23 % more; the 300-link stress case 44 % more (each
+link is now also checked against the abusable-hosting list). Moving
+`url.Parse` behind a host check saved allocations but no measurable time.
+
+The full stack does not notice, because analysis is not its bottleneck.
+Load run B again (corpus mix, 5,000 messages, 32 clients, polling every
+10 ms) on `0.4.0`: **1,019.6 scans/s**, accept p95 4.8 ms, end-to-end p50
+25.7 / p95 64.2 / p99 91.3 ms, 0 rejected, 0 failed. That is within the
+spread of earlier runs (868.1–980.9 scans/s on `0.2.0`); runs vary.
