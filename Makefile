@@ -18,5 +18,5 @@ eval-sample: ; python3 eval/evaluate.py --labels testdata/labels.csv --min-recal
 corpora:     ; ./eval/fetch_corpora.sh
 eval:        corpora ; python3 eval/evaluate.py --ham data/ham --phish data/phish --out eval/report && python3 eval/explain.py eval/report.json
 # Gate on a fixed holdout subset of the public corpora; numbers in docs/EVAL.md.
-eval-subset: corpora ; python3 eval/make_subset.py data/ > data/subset.csv && python3 eval/evaluate.py --labels data/subset.csv --min-recall 0.30 --max-fpr 0.01 --max-parse-errors 0 --out eval/out/subset
+eval-subset: corpora ; python3 eval/make_subset.py data/ > data/subset.csv && python3 eval/evaluate.py --labels data/subset.csv --min-recall 0.39 --max-fpr 0.01 --max-parse-errors 0 --out eval/out/subset
 clean:       ; rm -rf bin eval/report.*

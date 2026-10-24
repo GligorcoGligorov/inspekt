@@ -355,3 +355,43 @@ brand condition is the mitigation; a modern ham corpus is the real test.
 All data after check 1: precision 0.9491, recall 0.3460, F1 0.5072, FPR
 0.0092 (709 / 38 / 4,112 / 1,340). CI subset (holdout): precision 0.9677,
 recall 0.30, FPR 0.01; its gate is raised to `--min-recall 0.30`.
+
+### Check 2: `brand_display_name` (+30), kept → `inspekt-rules/0.4.0`
+
+**Design (dev only).** Five variants of "a protected brand is named but
+neither the sender nor any link belongs to it" were compared on the dev
+messages the rules still missed:
+
+| Variant (dev) | Missed phish it covers | Clean ham it touches |
+|---|---|---|
+| A: brand anywhere in subject/body, links present, none to the brand | 241 | 325 |
+| B: brand in the subject | 50 | 50 |
+| C: brand anywhere in the From display name | 53 | 2 |
+| D: brand in subject or display name + credential wording | 62 | 11 |
+| E: brand in subject or display name, links present | 78 | 45 |
+| **C′: display name *starts with* the brand** | **53** | **0** |
+
+Tech mailing lists name Microsoft, Apple and Google constantly, so any
+"brand in the text" rule is unusable here (A: 325 ham). C was precise; its
+2 ham hits were a newsletter called "Lockergnome Apple Core": a publication
+*about* a brand, not a sender claiming to *be* it. C′ encodes that
+distinction (phishing names the sender as the brand: "DocuSign", "DHL
+Express", "Netflix Support"). "office" and "live" are not treated as brand
+names at the start of a display name ("Office Manager", "Live Events"):
+ordinary words, decided from domain knowledge, not from the data (they
+covered 2 dev phish).
+
+| Split | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|
+| dev before | 0.9489 | 0.3510 | 0.0092 | 576 / 31 / 3,326 / 1,065 |
+| dev after | 0.9530 | 0.3833 | 0.0092 | 629 / 31 / 3,326 / 1,012 |
+| holdout before | 0.9500 | 0.3260 | 0.0088 | 133 / 7 / 786 / 275 |
+| **holdout after** | **0.9565** | **0.3775** | **0.0088** | 154 / 7 / 786 / 254 |
+
+Kept: holdout recall +0.0515, no new false positive. Remaining risk: brands
+that legitimately send from other domains (agencies, payment processors);
+none appear in this corpus, so that cost is unmeasured.
+
+All data after check 2: precision 0.9537, recall 0.3821, F1 0.5456, FPR
+0.0092 (783 / 38 / 4,112 / 1,266). CI subset (holdout): precision 0.9750,
+recall 0.39, FPR 0.01; gate raised to `--min-recall 0.39`.

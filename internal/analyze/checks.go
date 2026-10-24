@@ -177,11 +177,46 @@ func (c LookalikeCheck) Run(in *Input) []Signal {
 	}
 	if in.Msg.From != nil {
 		check("sender", in.Msg.From.Domain)
+		if s, ok := brandDisplayName(in.Msg.From, bs); ok {
+			out = append(out, s)
+		}
 	}
 	for _, l := range in.Links {
 		check("link", l.Host)
 	}
 	return out
+}
+
+// displayNameBrand matches a display name that starts with a word, e.g.
+// "DocuSign", "DHL Express", "Netflix Support", "Microsoft365 Team".
+var displayNameBrand = regexp.MustCompile(`^[\W_]*([a-zA-Z]+)\d*\b`)
+
+// notBrandNames are protected labels that are also ordinary words at the
+// start of legitimate sender names ("Office Manager", "Live Events").
+var notBrandNames = map[string]bool{"office": true, "live": true}
+
+// brandDisplayName flags a sender that presents itself as a protected brand
+// ("DocuSign" <alerts@random.example>) from a domain that is not the
+// brand's. Only a display name that *starts* with the brand counts: a
+// publication about the brand ("Lockergnome Apple Core") is not a claim to
+// be it. Designed on the dev split (docs/EVAL.md).
+func brandDisplayName(from *email.Address, bs brands) (Signal, bool) {
+	m := displayNameBrand.FindStringSubmatch(from.Name)
+	if m == nil {
+		return Signal{}, false
+	}
+	word := strings.ToLower(m[1])
+	if notBrandNames[word] {
+		return Signal{}, false
+	}
+	sender := RegistrableDomain(from.Domain)
+	for _, b := range bs {
+		if b.label == word && sender != b.domain {
+			return Signal{ID: "brand_display_name", Severity: SevHigh, Score: 30,
+				Evidence: []string{fmt.Sprintf("display name %q claims %s, sender domain is %s", from.Name, b.domain, sender)}}, true
+		}
+	}
+	return Signal{}, false
 }
 
 // ---------------------------------------------------------------------------

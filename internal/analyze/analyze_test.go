@@ -357,3 +357,31 @@ func TestHostingCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestBrandDisplayName(t *testing.T) {
+	bs := newBrands(DefaultConfig.ProtectedDomains)
+	cases := []struct {
+		name, email string
+		hit         bool
+	}{
+		{"DocuSign", "alerts@sign-portal.example", true},
+		{"DHL Express", "noreply@parcel-track.example", true},
+		{"Netflix Support", "help@acct-netflix-billing.example", true},
+		{"Microsoft365 Team", "it@corp-mail.example", true},
+		{"\"PayPal\"", "service@pp-secure.example", true},
+		// Must NOT fire:
+		{"PayPal", "service@paypal.com", false},             // the real sender
+		{"Apple Support", "support@email.apple.com", false}, // a subdomain of the brand
+		{"Lockergnome Apple Core", "subscriptions@lockergnome.com", false},
+		{"Office Manager", "admin@example.org", false},
+		{"Live Events Team", "events@example.org", false},
+		{"Applebee's", "offers@example.org", false},
+		{"", "a@b.example", false},
+	}
+	for _, c := range cases {
+		addr := &email.Address{Name: c.name, Email: c.email, Domain: c.email[strings.IndexByte(c.email, '@')+1:]}
+		if _, ok := brandDisplayName(addr, bs); ok != c.hit {
+			t.Errorf("%q <%s>: hit=%v, want %v", c.name, c.email, ok, c.hit)
+		}
+	}
+}
