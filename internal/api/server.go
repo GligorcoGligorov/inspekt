@@ -36,6 +36,10 @@ type Server struct {
 // Handler returns the routed HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.page) // demo page; exactly "/", not a catch-all
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent) // browsers ask for it; no 404 noise
+	})
 	if s.Queue != nil {
 		mux.HandleFunc("POST /v1/scans", s.enqueue)
 		mux.HandleFunc("GET /v1/scans/{id}", s.get)

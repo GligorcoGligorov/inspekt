@@ -50,6 +50,10 @@ expect() { # expect LOCATION STATUS [VERDICT]
 
 wait_ready
 
+step "the demo page is served"
+curl -sf "$BASE/" | grep -q "<title>Inspekt</title>" || fail "GET / did not serve the demo page"
+echo ok
+
 step "phishing and clean samples are analysed by the worker"
 phish=$(post testdata/phish_lookalike.eml)
 expect "$phish" done malicious

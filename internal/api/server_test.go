@@ -3,12 +3,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -270,5 +273,69 @@ func TestAsyncErrors(t *testing.T) {
 		if res.StatusCode != http.StatusServiceUnavailable {
 			t.Errorf("redis down, %s %s: status %d, want 503", c.method, c.path, res.StatusCode)
 		}
+	}
+}
+
+func TestDemoPage(t *testing.T) {
+	ts := newTestServer()
+	defer ts.Close()
+	res, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("status %d, type %q", res.StatusCode, res.Header.Get("Content-Type"))
+	}
+	for _, want := range []string{"<title>Inspekt</title>", `fetch("/v1/scans"`, "textContent"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("page missing %q", want)
+		}
+	}
+	// No external resources: everything is embedded.
+	if regexp.MustCompile(`(?i)(src|href)\s*=\s*["']?(https?:)?//`).Match(body) {
+		t.Error("page loads an external resource")
+	}
+	// The CSP must allow the page's own script and style, by their hashes.
+	csp := res.Header.Get("Content-Security-Policy")
+	for _, tag := range []string{"script", "style"} {
+		m := regexp.MustCompile(`(?s)<` + tag + `>(.*?)</` + tag + `>`).FindSubmatch(body)
+		sum := sha256.Sum256(m[1])
+		if !strings.Contains(csp, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'") {
+			t.Errorf("CSP does not allow the page's <%s>: %s", tag, csp)
+		}
+	}
+	if !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "connect-src 'self'") {
+		t.Errorf("CSP too loose or missing: %s", csp)
+	}
+	// "/" is the page, not a catch-all.
+	if r, _ := http.Get(ts.URL + "/nope"); r.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /nope: %d, want 404", r.StatusCode)
+	}
+}
+
+// The page renders whatever the API returns, so the inline API answer it
+// relies on (verdict, score, signals with evidence) must keep its shape.
+func TestDemoPageContract(t *testing.T) {
+	ts := newTestServer()
+	defer ts.Close()
+	res := postFile(t, ts.URL, "phish_lookalike.eml")
+	var rep struct {
+		Verdict string
+		Score   int
+		Engine  string
+		Signals []struct {
+			ID, Check, Severity string
+			Score               int
+			Evidence            []string
+		}
+		Message struct{ Subject string }
+	}
+	if err := json.NewDecoder(res.Body).Decode(&rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Verdict == "" || len(rep.Signals) == 0 || rep.Signals[0].ID == "" || len(rep.Signals[0].Evidence) == 0 || rep.Message.Subject == "" {
+		t.Fatalf("report shape changed: %+v", rep)
 	}
 }

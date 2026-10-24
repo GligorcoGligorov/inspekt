@@ -34,6 +34,7 @@ testdata/phish_lookalike.eml
 make test          # Go + Python tests
 make scan          # scan the sample messages
 make run           # HTTP API on :8080, scans analysed inline (no Redis needed)
+open http://localhost:8080   # demo page: drop an .eml, see verdict, score and evidence
 curl --data-binary @testdata/phish_lookalike.eml localhost:8080/v1/scans
 
 make e2e           # full stack in Docker (API, Redis, worker, MariaDB) + end-to-end checks
@@ -124,7 +125,7 @@ flowchart LR
 | `internal/qr` | QR codes in image attachments → links, with image count / size / pixel / time limits |
 | `internal/auth` | Native SPF / DKIM / DMARC verification behind an injectable DNS `Resolver` |
 | `internal/analyze` | Independent checks, signal merging, scoring, verdict |
-| `internal/api` | HTTP API (async with a queue, inline without), Prometheus-format metrics |
+| `internal/api` | HTTP API (async with a queue, inline without), metrics, and the demo page at `/` (one embedded HTML file, strict CSP) |
 | `internal/queue` | Redis Streams producer, worker pool, watchdog, dead-letter queue |
 | `internal/store` | `Store` interface; MariaDB (upsert, signals table, migrations under a named lock) and in-memory |
 | `internal/pipeline` | What a worker does with a job: analyse, then save |
