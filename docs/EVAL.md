@@ -395,3 +395,25 @@ none appear in this corpus, so that cost is unmeasured.
 All data after check 2: precision 0.9537, recall 0.3821, F1 0.5456, FPR
 0.0092 (783 / 38 / 4,112 / 1,266). CI subset (holdout): precision 0.9750,
 recall 0.39, FPR 0.01; gate raised to `--min-recall 0.39`.
+
+### Check 3 (credential forms in HTML attachments): not built
+
+**Dev data.** No missed dev phishing message has an HTML-like attachment
+(`.html`, `.htm`, `.shtml`, `.xhtml`, `.svg`, or an HTML / SVG content
+type). All 81 dev phishing messages with one are already flagged by the
+existing `html_attachment` signal (30 points); 59 of them contain a password
+input. A form check would add evidence, not recall, so it was not built and
+the holdout was not consulted for it.
+
+### Where the recall work ends (rules `0.4.0`)
+
+| Split | Precision | Recall | FPR |
+|---|---|---|---|
+| dev, start of the day | 0.9083 | 0.1871 | 0.0092 |
+| dev, after checks 1 and 2 | 0.9530 | 0.3833 | 0.0092 |
+| holdout, start of the day | 0.9205 | 0.1985 | 0.0088 |
+| **holdout, after checks 1 and 2** | **0.9565** | **0.3775** | **0.0088** |
+
+Holdout FPR stayed at 0.88 % (7 of 793), under the 1 % limit; holdout
+recall nearly doubled. The holdout was measured exactly twice, once per
+check, after each design was frozen.
