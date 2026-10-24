@@ -1,5 +1,7 @@
 # Notes
 
+> These study notes were generated with Claude Code during the build, one section per step. The interview answers are written in the first person as practice answers for me to explain the design; they describe how the system works, not who typed each line. See 'How I built this' in the README.
+
 Plain-language explanations of each step, plus interview questions to practise.
 
 ---
@@ -470,15 +472,20 @@ false positive fails CI until someone updates the gate and EVAL.md on purpose.
 
 ### Interview questions
 
-1. **"Your recall is 19 %. Isn't that bad?"**
-   It is low, and I report it as it is. What matters is *why*: most misses
-   use legitimate hosting with nothing structurally wrong, which no
-   structural rule can see. The engine is precise (91 %, under 1 % false
-   positives), which is what a first layer should be: cheap, explainable,
-   rarely wrong. The evaluation tells me what to build next (an
-   abusable-hosting signal, open-redirect unwrapping, URL reputation, the
-   grey-zone LLM), and each will be measured the same way. I would rather
-   show 19 % I can explain than 95 % from a model fitted to the test set.
+1. **"Your recall is about 38 %. Isn't that low?"**
+   It is, and I report it as measured: with rules `0.4.0`, recall is
+   0.3775 on the holdout (about 38 %) and 0.3821 over all 6,202 emails, at
+   95 % precision and under 1 % false positives. What matters is *why* and
+   *how it moved*. The miss analysis on the dev split showed the largest
+   group linked to legitimate hosting attackers abuse (IPFS, object
+   storage, serverless hosting) or claimed a brand in the sender name. Two
+   checks aimed at exactly that, each designed on dev only and measured
+   once on the holdout, raised holdout recall from 0.1985 to 0.3775 with
+   **no new false positives** (holdout FPR stayed at 0.88 %). Most
+   remaining misses have nothing structurally wrong, which is where the
+   grey-zone LLM, open-redirect unwrapping and URL reputation come in, each
+   to be measured the same way. I would rather show 38 % I can explain than
+   95 % from a model fitted to the test set.
 
 2. **"How do you know your weight changes didn't just overfit the corpus?"**
    A fixed 80/20 split by hash of the file name, decided before tuning. I
