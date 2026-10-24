@@ -201,7 +201,7 @@ crash in HTML link extraction on non-ASCII input (now fixed and fuzz-tested).
 **Gates.** CI fails if detection regresses: the 7 hand-made samples
 (`--min-recall 0.8 --max-fpr 0`; the one miss, `bec_reply_to.eml`, is a
 documented gap for the grey-zone LLM) and a fixed 200-message holdout subset
-of the public corpora (`--min-recall 0.39 --max-fpr 0.01`), rebuilt in CI
+of the public corpora (`--min-recall 0.41 --max-fpr 0.01`), rebuilt in CI
 from the pinned downloads because the SpamAssassin texts may not be
 redistributed. Both gates sit exactly at today's numbers, and parse errors
 fail them too.

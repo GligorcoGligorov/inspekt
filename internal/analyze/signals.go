@@ -15,6 +15,8 @@ var SignalIDs = []string{
 	"ip_literal_url", "html_form_in_email", "link_text_mismatch", "url_shortener", "qr_code_link",
 	// hosting
 	"abused_hosting_link",
+	// hidden content
+	"hidden_text_salting",
 	// attachments
 	"double_extension", "executable_attachment", "html_attachment", "macro_document", "container_attachment",
 	// lure

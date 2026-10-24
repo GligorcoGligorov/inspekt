@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/GligorcoGligorov/inspekt/internal/auth"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
@@ -154,10 +155,12 @@ type Report struct {
 
 // HiddenSummary is the hidden content of a message, capped for display.
 type HiddenSummary struct {
-	Runs      []extract.HiddenRun `json:"runs,omitempty"`
-	Chars     int                 `json:"chars"`      // letters and digits in all hidden text
-	ZeroWidth int                 `json:"zero_width"` // invisible characters, HTML + subject + plain text
-	Comments  string              `json:"comments,omitempty"`
+	Runs         []extract.HiddenRun `json:"runs,omitempty"`
+	Chars        int                 `json:"chars"`         // letters and digits in all hidden text
+	VisibleChars int                 `json:"visible_chars"` // letters and digits a reader sees in the HTML
+	Interleaved  int                 `json:"interleaved"`   // hidden runs between visible text, not before it
+	ZeroWidth    int                 `json:"zero_width"`    // invisible characters, HTML + subject + plain text
+	Comments     string              `json:"comments,omitempty"`
 }
 
 const maxShownRuns, maxShownChars = 10, 300
@@ -167,12 +170,23 @@ func hiddenSummary(c extract.Content, extraZW int) *HiddenSummary {
 	if len(c.Hidden) == 0 && zw == 0 && c.Comments == "" {
 		return nil
 	}
-	h := &HiddenSummary{Chars: c.HiddenChars, ZeroWidth: zw, Comments: shorten(c.Comments, maxShownChars)}
+	h := &HiddenSummary{Chars: c.HiddenChars, VisibleChars: alnumCount(c.Visible), Interleaved: c.Interleaved,
+		ZeroWidth: zw, Comments: shorten(c.Comments, maxShownChars)}
 	for _, r := range c.Hidden[:min(len(c.Hidden), maxShownRuns)] {
 		r.Text = shorten(r.Text, maxShownChars)
 		h.Runs = append(h.Runs, r)
 	}
 	return h
+}
+
+func alnumCount(s string) int {
+	n := 0
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			n++
+		}
+	}
+	return n
 }
 
 func shorten(s string, n int) string {
@@ -184,7 +198,7 @@ func shorten(s string, n int) string {
 
 // Version is reported in every result so verdicts can be tied to the rule
 // set that produced them.
-const Version = "inspekt-rules/0.5.0"
+const Version = "inspekt-rules/0.6.0"
 
 // Engine runs a fixed set of checks.
 type Engine struct {
@@ -218,6 +232,7 @@ func New(cfg Config) *Engine {
 		LookalikeCheck{Protected: cfg.ProtectedDomains, brands: newBrands(cfg.ProtectedDomains)},
 		LinkCheck{},
 		HostingCheck{},
+		HiddenCheck{},
 		AttachmentCheck{},
 		LureCheck{},
 	}}

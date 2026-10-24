@@ -410,3 +410,29 @@ func TestVisibleTextAndHiddenSummary(t *testing.T) {
 		t.Errorf("nothing hidden, but summary %+v", clean.Hidden)
 	}
 }
+
+func TestHiddenTextSalting(t *testing.T) {
+	filler := strings.Repeat("lorem ipsum dolor sit amet consectetur ", 4) // 132 letters
+	pad := strings.Repeat("&zwnj;&nbsp;", 80)
+	cases := []struct {
+		name, html string
+		hit        bool
+	}{
+		{"hidden filler outweighs the message",
+			`<p>Your mailbox is full. <a href="https://x.example">Release messages</a></p><div style="font-size:0">` + filler + `</div>`, true},
+		{"filler scattered between words",
+			`<p>Pay<span style="display:none">` + filler + `</span> now</p>`, true},
+		// Must NOT fire:
+		{"short preheader", `<div style="display:none;max-height:0;overflow:hidden">Coats 20% off until Sunday ` + pad + `</div><p>Our autumn sale has started.</p>`, false},
+		{"long preheader before a longer body", `<div style="display:none">` + filler + `</div><p>` + filler + filler + `</p>`, false},
+		{"a little hidden text in a long visible body", `<p>` + filler + `</p><span style="display:none">view online</span><p>` + filler + `</p>`, false},
+		{"nothing hidden", `<p>` + filler + `</p>`, false},
+	}
+	for _, c := range cases {
+		in, _ := newInput(&email.Message{HTMLBody: c.html})
+		got := HiddenCheck{}.Run(in)
+		if hit := len(got) > 0 && got[0].ID == "hidden_text_salting"; hit != c.hit {
+			t.Errorf("%s: got %+v, want hit=%v", c.name, got, c.hit)
+		}
+	}
+}

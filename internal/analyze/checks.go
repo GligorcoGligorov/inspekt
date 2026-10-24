@@ -467,3 +467,32 @@ func (HostingCheck) Run(in *Input) []Signal {
 	return []Signal{{ID: "abused_hosting_link", Severity: SevHigh, Score: 30,
 		Evidence: []string{fmt.Sprintf("links to %s (%s) and %s", hosted[0].Host, kinds[0], why)}}}
 }
+
+// ---------------------------------------------------------------------------
+// HiddenCheck looks at what the HTML hides from its reader (see
+// extract.HTMLContent). Legitimate mail hides things too, most often a
+// short preview line ("preheader") before the body, so that alone never
+// counts. Designed on the dev split (docs/EVAL.md).
+
+type HiddenCheck struct{}
+
+func (HiddenCheck) Name() string { return "hidden" }
+
+// preheaderOnly: one hidden run, before any visible text, of preview length.
+func preheaderOnly(c extract.Content) bool {
+	return len(c.Hidden) == 1 && c.Hidden[0].VisibleBefore == 0 && c.HiddenChars <= 300
+}
+
+func (HiddenCheck) Run(in *Input) []Signal {
+	c := in.Content
+	var out []Signal
+	// Salting: at least as much hidden text as visible, beyond a preheader.
+	// Text a reader never sees, outweighing what they do see, is there for
+	// the filters.
+	if len(c.Hidden) > 0 && !preheaderOnly(c) && c.HiddenChars >= 50 && c.HiddenChars >= alnumCount(c.Visible) {
+		out = append(out, Signal{ID: "hidden_text_salting", Severity: SevMedium, Score: 20,
+			Evidence: []string{fmt.Sprintf("%d hidden letters/digits vs %d visible, in %d hidden run(s) (%s): %q",
+				c.HiddenChars, alnumCount(c.Visible), len(c.Hidden), c.Hidden[0].Reason, shorten(c.Hidden[0].Text, 120))}})
+	}
+	return out
+}

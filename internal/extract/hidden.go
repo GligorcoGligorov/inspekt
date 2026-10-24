@@ -62,7 +62,7 @@ var voidElements = map[string]bool{"area": true, "base": true, "br": true, "col"
 type frame struct {
 	tag    string
 	hidden string // reason, "" if visible
-	bg     string // background colour in effect (normalised), "" if unknown
+	bg     string // background colour in effect (normalised); "" or unknownBg if not known
 	color  string // text colour in effect (inherited separately from bg)
 	skip   bool   // inside script/style/head...
 }
@@ -76,7 +76,7 @@ func HTMLContent(doc string) Content {
 	rules := styleRules(doc)
 	var vis, comments strings.Builder
 	visRunes := 0
-	stack := []frame{{tag: "#root", bg: "#ffffff"}}
+	stack := []frame{{tag: "#root"}}
 	var cur *HiddenRun // run being extended by adjacent hidden text
 
 	z := html.NewTokenizer(strings.NewReader(doc))
@@ -113,6 +113,8 @@ func HTMLContent(doc string) Content {
 					if bg := normColor(string(v)); bg != "" {
 						f.bg = bg
 					}
+				case "background": // an image: the colour behind the text is unknown
+					f.bg = unknownBg
 				case "color": // <font color=...>
 					if col := normColor(string(v)); col != "" {
 						f.color = col
@@ -164,7 +166,7 @@ func HTMLContent(doc string) Content {
 			if top.skip {
 				continue
 			}
-			if top.hidden == "" && top.color != "" && top.color == top.bg {
+			if top.hidden == "" && top.color != "" && top.color == top.bg && top.bg != unknownBg {
 				top.hidden = "text colour matches background (" + top.color + ")"
 			}
 			raw := string(z.Text())
@@ -282,10 +284,16 @@ func hiddenBy(decls string) (reason, bg, color string) {
 		v := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[2]), "!important"))
 		props[strings.ToLower(m[1])] = strings.ToLower(v)
 	}
-	if v := props["background-color"]; v != "" {
-		bg = normColor(v)
-	} else if f := strings.Fields(props["background"]); len(f) > 0 {
-		bg = normColor(f[0])
+	switch {
+	case strings.Contains(props["background"], "url(") || strings.Contains(props["background"], "gradient") ||
+		strings.Contains(props["background-image"], "url(") || strings.Contains(props["background-image"], "gradient"):
+		bg = unknownBg // an image or gradient: the colour behind the text is unknown
+	case props["background-color"] != "":
+		bg = normColor(props["background-color"])
+	default:
+		if f := strings.Fields(props["background"]); len(f) > 0 {
+			bg = normColor(f[0])
+		}
 	}
 	color = normColor(props["color"])
 	overflowHidden := props["overflow"] == "hidden"
@@ -374,6 +382,11 @@ func numberAtMost(v string, limit float64) bool {
 	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
 	return err == nil && f <= limit
 }
+
+// unknownBg marks a background whose colour cannot be known (an image or a
+// gradient). The root starts with no known background either: white text
+// counts as hidden only against a background the email itself declares.
+const unknownBg = "?"
 
 var namedColors = map[string]string{"white": "#ffffff", "black": "#000000", "red": "#ff0000",
 	"blue": "#0000ff", "green": "#008000", "gray": "#808080", "grey": "#808080", "silver": "#c0c0c0"}

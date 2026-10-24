@@ -450,3 +450,42 @@ Kept (this was a required change, not an optional signal): holdout +2
 detections, no new false positive; on dev, −1, from a match on markup.
 All data: precision 0.9538, recall 0.3826, FPR 0.0092. CI subset unchanged
 (recall 0.39, FPR 0.01).
+
+### Step 2: `hidden_text_salting` (+20), kept → `inspekt-rules/0.6.0`
+
+**How common is hidden text?** On the dev split (final extractor): **229
+of 1,641 phishing messages (14 %)** contain hidden text, against **2 of
+3,357 ham**. That gap is partly the era again: most of the 2002 ham is
+plain text, so it barely has HTML to hide anything in. Modern newsletters
+routinely hide preview lines (preheaders), which is why the legitimate
+samples in `testdata/` exist and a short preheader never counts.
+
+**Design (dev only).** Candidate rules over the hidden text of dev messages
+the rules still missed: hidden letters ≥ 100 (62 missed phish, 1 ham);
+≥ 3 interleaved runs (23, 1); hidden ≥ visible (46, 0); many invisible
+characters (6, 0). The one ham hit exposed an extractor assumption, not
+salting: WinXPnews has white headings on cells with a background *image*
+(`<td background=…>`), and the extractor assumed a white page background
+when none was declared. Both were changed before freezing: white text
+counts as hidden only against a background the email itself declares,
+and an image or gradient background makes the colour unknown. That cost
+49 dev phishing messages their "hidden" status (229 instead of 286) in
+exchange for not guessing.
+
+Frozen rule: hidden text beyond a short preheader (a single hidden run
+before any visible text, ≤ 300 letters, is ignored), at least 50 hidden
+letters/digits, and **at least as much hidden as visible text**. +20: it
+never decides alone (threshold 30). On dev it was predicted to add 20
+detections and added exactly 20, so the extractor refinement in the same
+commit changed nothing else on dev.
+
+| Split | Precision | Recall | FPR | TP / FP / TN / FN |
+|---|---|---|---|---|
+| dev before | 0.9530 | 0.3827 | 0.0092 | 628 / 31 / 3,326 / 1,013 |
+| dev after | 0.9543 | 0.3949 | 0.0092 | 648 / 31 / 3,326 / 993 |
+| holdout before | 0.9571 | 0.3824 | 0.0088 | 156 / 7 / 786 / 252 |
+| **holdout after** | **0.9581** | **0.3922** | **0.0088** | 160 / 7 / 786 / 248 |
+
+Kept: holdout +4 detections, no new false positive. All data: precision
+0.9551, recall 0.3943, F1 0.5582, FPR 0.0092. CI subset: precision 0.9762,
+recall 0.41, FPR 0.01; gate raised to `--min-recall 0.41`.

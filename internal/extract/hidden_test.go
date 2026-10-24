@@ -23,7 +23,7 @@ func TestHTMLContentHidingTechniques(t *testing.T) {
 		{"clip-path", `<span style="clip-path: inset(50%)">SECRET</span><p>x</p>`, "clip-path:inset(50%)"},
 		{"scale", `<span style="transform:scale(0)">SECRET</span><p>x</p>`, "transform:scale(0)"},
 		{"hidden attribute", `<div hidden>SECRET</div><p>x</p>`, "hidden attribute"},
-		{"white on default white", `<p>x <span style="color:#FFF">SECRET</span></p>`, "text colour matches background (#ffffff)"},
+		{"white on declared white", `<body bgcolor="#ffffff"><p>x <span style="color:#FFF">SECRET</span></p></body>`, "text colour matches background (#ffffff)"},
 		{"same as table bgcolor", `<table><tr><td bgcolor="#f0f0f0"><font color="#F0F0F0">SECRET</font> x</td></tr></table>`, "text colour matches background (#f0f0f0)"},
 		{"rgb colour", `<div style="background-color:rgb(0,0,0)"><span style="color: rgb(0, 0, 0)">SECRET</span> x</div>`, "text colour matches background (#000000)"},
 		{"class rule in style block", `<style>.pre{display:none}</style><p>x</p><div class="a pre">SECRET</div>`, "display:none"},
@@ -43,14 +43,17 @@ func TestHTMLContentHidingTechniques(t *testing.T) {
 
 func TestHTMLContentStaysVisible(t *testing.T) {
 	for name, doc := range map[string]string{
-		"white text on a dark button":   `<table><tr><td bgcolor="#0b5394"><a style="color:#ffffff">Pay invoice</a></td></tr></table>`,
-		"white div, child on dark":      `<div style="color:#fff"><span style="background:#222">Pay invoice</span></div>`,
-		"1em is normal size":            `<p style="font-size:1em">Pay invoice</p>`,
-		"media query rules are ignored": `<style>@media (max-width:600px){.c{display:none}}</style><p class="c">Pay invoice</p>`,
-		"descendant selectors ignored":  `<style>table .c{display:none}</style><p class="c">Pay invoice</p>`,
-		"normal small print":            `<p style="font-size:11px;color:#666">Pay invoice</p>`,
-		"unclosed tags":                 `<p>Pay <b>invoice`,
-		"stray end tag does not unhide": `<p>Pay</span> invoice</p>`,
+		"white text on a dark button":        `<table><tr><td bgcolor="#0b5394"><a style="color:#ffffff">Pay invoice</a></td></tr></table>`,
+		"white text, no declared background": `<p style="color:#ffffff">Pay invoice</p>`,
+		"white on a background image":        `<body bgcolor="#fff"><table><tr><td background="hero.jpg"><font color="#ffffff">Pay invoice</font></td></tr></table></body>`,
+		"white on a css background image":    `<div style="background:#fff"><div style="background-image:url(h.png);color:#fff">Pay invoice</div></div>`,
+		"white div, child on dark":           `<div style="color:#fff"><span style="background:#222">Pay invoice</span></div>`,
+		"1em is normal size":                 `<p style="font-size:1em">Pay invoice</p>`,
+		"media query rules are ignored":      `<style>@media (max-width:600px){.c{display:none}}</style><p class="c">Pay invoice</p>`,
+		"descendant selectors ignored":       `<style>table .c{display:none}</style><p class="c">Pay invoice</p>`,
+		"normal small print":                 `<p style="font-size:11px;color:#666">Pay invoice</p>`,
+		"unclosed tags":                      `<p>Pay <b>invoice`,
+		"stray end tag does not unhide":      `<p>Pay</span> invoice</p>`,
 	} {
 		got := HTMLContent(doc)
 		if got.Visible != "Pay invoice" || len(got.Hidden) != 0 {
