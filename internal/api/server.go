@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 	"github.com/GligorcoGligorov/inspekt/internal/metrics"
 	"github.com/GligorcoGligorov/inspekt/internal/queue"
@@ -31,6 +32,8 @@ type Server struct {
 	Queue *queue.Queue
 	// Store, when set, is where finished results are read from.
 	Store store.Store
+	// Campaign holds the giant-cluster guard for GET /v1/campaigns.
+	Campaign campaign.Options
 }
 
 // Handler returns the routed HTTP handler.
@@ -52,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 		w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /readyz", s.ready)
+	mux.HandleFunc("GET /v1/campaigns", s.campaigns)
 	mux.Handle("GET /metrics", metrics.Handler())
 	return mux
 }

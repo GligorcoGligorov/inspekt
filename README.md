@@ -160,11 +160,12 @@ flowchart LR
 | `internal/store` | `Store` interface; MariaDB (upsert, signals table, migrations under a named lock) and in-memory |
 | `internal/pipeline` | What a worker does with a job: analyse, then save |
 | `internal/llm` | Optional grey-zone reviewer: data minimisation, OpenAI-compatible client, per-minute and daily budget, 429 pause |
+| `internal/campaign` | Campaign indicators, union-find clustering with a giant-cluster guard |
 | `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
 | `internal/metrics` | Prometheus metrics shared by API and worker; queue gauges read from Redis at scrape time |
 | `deploy/` | Prometheus scrape config, Grafana datasource and dashboard (provisioned) |
 | `migrations/` | Numbered SQL files, embedded in the binaries and applied at startup |
-| `cmd/` | `inspekt` (CLI), `inspekt-api`, `inspekt-worker`, `inspekt-load` (load generator) |
+| `cmd/` | `inspekt` (CLI), `inspekt-api`, `inspekt-worker`, `inspekt-load` (load generator), `inspekt-campaigns` (offline campaign measurement) |
 | `eval/` | Corpus fetch (pinned), held-out split, precision / recall / FPR, analysis, CI gates |
 
 ## Detection quality
@@ -336,6 +337,98 @@ mostly plain text, so the false-positive cost on modern HTML mail is not
 measured. The AI-injection signal is informational until it can be
 measured on modern labelled mail (real injection attempts and real
 legitimate mail that talks about AI); only then would it earn points.
+
+## Campaigns (v0.7, correlation only; branch `feat/campaigns`)
+
+Scans that come from the same attack are grouped into **campaigns**, the way
+a threat-intel platform correlates detections. This is a correlation layer
+only: it never changes a score or a verdict (the evaluation numbers above
+are identical with and without it).
+
+**Design.**
+
+- For each finished scan, `internal/campaign` extracts indicators and
+  stores them in `scan_indicators` (migration 002) **in the same
+  transaction** as the result, so a redelivered message never duplicates
+  them.
+  - **Strong** (one shared value links two emails): attachment SHA-256, and
+    the full URL (scheme://host/path, query dropped) of links to URL
+    shorteners and abusable hosting, where the bare host is shared by
+    everyone.
+  - **Weak** (two emails need shared values of **two different kinds**):
+    the link's registrable domain (full Public Suffix List; huge benign
+    platforms and the recipient's own domain skipped), the first public IP
+    in the `Received` "from" clauses, and a fingerprint of the normalised
+    subject (lowercase, `re:`/`fw:` removed, digit runs → `#`).
+- On read, union-find groups all scans of the window transitively. Missed
+  phishing therefore joins its caught siblings; `min_verdict` then filters
+  campaigns by their highest member.
+- Guards: a value shared by more than max(20, 5 % of the window) scans is
+  ignored; a cluster above 500 scans is returned marked **oversized**
+  ("likely shared infrastructure") and counted separately
+  (`INSPEKT_CAMPAIGN_MAX_SHARED`, `_MAX_SHARE`, `_MAX_SIZE`).
+- The campaign id is a short hash of the smallest scan id, so it is stable.
+
+```bash
+$ curl -s 'localhost:8080/v1/campaigns?since=24h&min_size=2&min_verdict=suspicious' | jq '.campaigns[0]'
+# abridged, from a local run with three related test emails
+{
+  "id": "f6448aa1f93c",
+  "size": 3,
+  "first_seen": "…",
+  "last_seen": "…",
+  "verdicts": {"suspicious": 3},
+  "max_verdict": "suspicious",
+  "indicators": [
+    {"kind": "link_host", "value": "evil-login.xyz", "scans": 3},
+    {"kind": "subject_fp", "value": "a52950d42f9e", "scans": 3}
+  ],
+  "subjects": ["Your mailbox is full (141 messages held)", "..."],
+  "scan_ids": ["3c0e…", "…"]
+}
+```
+
+`since` accepts `90m`, `24h` or `7d` (capped at 30 days); the response also
+reports the window, the guard limit, the values it dropped and the number
+of oversized clusters. Prometheus: `inspekt_campaign_query_duration_seconds`,
+`inspekt_campaigns_returned`. The demo page shows a Campaigns panel under
+each result.
+
+**Measured** (`python3 eval/campaigns.py --split dev`, then `--split holdout`
+once; details in [`docs/EVAL.md`](docs/EVAL.md)):
+
+| | dev | holdout |
+|---|---|---|
+| Campaigns (2+ emails) / 100 % phishing | 395 / 179 | 77 / 22 |
+| Missed phishing that shares a campaign with caught phishing | 82 of 993 (8.26 %) | 9 of 248 (3.63 %) |
+| Legitimate mail sharing a campaign with phishing | **0 of 3,357 (0.00 %)** | **0 of 793 (0.00 %)** |
+| Oversized clusters | 0 | 0 |
+
+The largest phishing campaigns are real attacks (billing-problem lures,
+fake DocuSign receipts, "shared document via OneDrive"); the largest
+clusters overall are legitimate mailing-list threads, correctly grouped and
+hidden by the default `min_verdict=suspicious`.
+
+**How it got here.** The first design (any single shared indicator links)
+built one component of 3,257 of 4,998 dev emails, chained by mailing-list
+relay IPs, public suffixes such as `co.za` counted as domains, and generic
+or recipient domains; 71.64 % of dev ham "shared a campaign" with
+phishing. The redesign above was decided from that diagnosis before
+measuring again; both rounds are in `docs/EVAL.md`.
+
+**Limitations.**
+
+- **The 0 % is flattered by the corpus:** 2002 ham and 2019–2025 phishing
+  can hardly share a subject pattern plus a host or IP. Modern legitimate
+  mail on the same email service providers as phishing is the real test.
+- The stricter rule misses campaigns whose emails share only one weak
+  indicator (for example only a link domain).
+- **Compute-on-read** reads and clusters the whole window per request, and
+  weak-indicator pairs grow with the square of each value's (guard-capped)
+  carrier count: fine up to roughly 100k scans per window. Beyond that,
+  materialise clusters (update them as each scan is saved) or run a
+  streaming job.
+- The corpora have no real time window, so each split was clustered as one.
 
 ## Observability
 

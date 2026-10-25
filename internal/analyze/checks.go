@@ -414,6 +414,14 @@ var (
 	brandWords = regexp.MustCompile(`(?i)\b(microsoft|office|outlook|paypal|apple|google|amazon|dhl|docusign|linkedin|dropbox|wetransfer|netflix|adobe)\d*\b`)
 )
 
+// IsShortener reports whether host belongs to a known URL shortener.
+// Exported for campaign correlation; scoring uses the same list.
+func IsShortener(host string) bool { return urlShorteners[RegistrableDomain(host)] }
+
+// AbusedHosting is the kind of abusable hosting a link points to ("" if
+// none). Exported for campaign correlation; scoring uses the same lists.
+func AbusedHosting(l extract.Link) string { return hostingKind(l) }
+
 func hostingKind(l extract.Link) string {
 	if ipfsPath.MatchString(l.URL) {
 		return "IPFS content path"

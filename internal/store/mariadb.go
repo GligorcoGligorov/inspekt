@@ -15,6 +15,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 )
 
 // MariaDB stores results in the scans and signals tables (see migrations/).
@@ -56,7 +57,7 @@ func (m *MariaDB) Save(ctx context.Context, s Scan) error {
 		from = sql.NullString{String: msg.From.Domain, Valid: true}
 	}
 	for attempt := 1; ; attempt++ {
-		err = m.save(ctx, r, from, s.Report.Signals)
+		err = m.save(ctx, r, from, s.Report.Signals, campaign.Extract(s.Report))
 		if attempt == 3 || !retryable(err) {
 			return err
 		}
@@ -68,12 +69,41 @@ func (m *MariaDB) Save(ctx context.Context, s Scan) error {
 	}
 }
 
+// saveIndicators writes the scan's campaign indicators in the caller's
+// transaction, with the same rule as signals: a re-save replaces them, a new
+// scan only inserts (no DELETE, so no gap locks between workers).
+// created_at is the stored received_at, which a re-save does not change.
+func saveIndicators(ctx context.Context, tx *sql.Tx, id string, resave bool, inds []campaign.Indicator) error {
+	if resave {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM scan_indicators WHERE scan_id = ?`, id); err != nil {
+			return fmt.Errorf("store: clear indicators: %w", err)
+		}
+	}
+	if len(inds) == 0 {
+		return nil
+	}
+	var received time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT received_at FROM scans WHERE id = ?`, id).Scan(&received); err != nil {
+		return fmt.Errorf("store: read received_at: %w", err)
+	}
+	q := "INSERT INTO scan_indicators (scan_id, kind, value, created_at) VALUES " +
+		strings.TrimSuffix(strings.Repeat("(?, ?, ?, ?),", len(inds)), ",")
+	args := make([]any, 0, 4*len(inds))
+	for _, ind := range inds {
+		args = append(args, id, ind.Kind, ind.Value, received)
+	}
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("store: save indicators: %w", err)
+	}
+	return nil
+}
+
 func retryable(err error) bool {
 	var me *mysql.MySQLError
 	return errors.As(err, &me) && (me.Number == 1213 || me.Number == 1205)
 }
 
-func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs []analyze.Signal) error {
+func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs []analyze.Signal, inds []campaign.Indicator) error {
 	tx, err := m.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -95,10 +125,14 @@ func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs
 	// DELETE matters. Deleting rows that do not exist still takes InnoDB
 	// gap locks, which collided with other workers' inserts and deadlocked
 	// under load. Only a re-save (2 = updated, 0 = unchanged) clears rows.
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, _ := res.RowsAffected()
+	if n != 1 {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM signals WHERE scan_id = ?`, r.ID); err != nil {
 			return fmt.Errorf("store: clear signals: %w", err)
 		}
+	}
+	if err := saveIndicators(ctx, tx, r.ID, n != 1, inds); err != nil {
+		return err
 	}
 	if len(sigs) > 0 {
 		q := "INSERT INTO signals (scan_id, signal_id, score) VALUES " +
@@ -132,6 +166,41 @@ func (m *MariaDB) Get(ctx context.Context, id string) (*Record, error) {
 }
 
 func (m *MariaDB) Ping(ctx context.Context) error { return m.DB.PingContext(ctx) }
+
+// Members reads the scans received since a time with their indicators. It
+// reads only what clustering needs (id, time, verdict, subject from the
+// report JSON), never whole reports. Compute-on-read: fine for a window of
+// tens of thousands of scans; beyond that, clusters should be materialised.
+func (m *MariaDB) Members(ctx context.Context, since time.Time) ([]campaign.Member, error) {
+	rows, err := m.DB.QueryContext(ctx, `
+		SELECT s.id, s.received_at, s.verdict,
+		       COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.report, '$.message.subject')), ''),
+		       i.kind, i.value
+		FROM scans s
+		LEFT JOIN scan_indicators i ON i.scan_id = s.id
+		WHERE s.received_at >= ?
+		ORDER BY s.id`, since.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []campaign.Member
+	for rows.Next() {
+		var mb campaign.Member
+		var kind, value sql.NullString
+		if err := rows.Scan(&mb.ScanID, &mb.ReceivedAt, &mb.Verdict, &mb.Subject, &kind, &value); err != nil {
+			return nil, err
+		}
+		if n := len(out); n == 0 || out[n-1].ScanID != mb.ScanID {
+			out = append(out, mb)
+		}
+		if kind.Valid {
+			last := &out[len(out)-1]
+			last.Indicators = append(last.Indicators, campaign.Indicator{Kind: kind.String, Value: value.String})
+		}
+	}
+	return out, rows.Err()
+}
 
 // migrationName matches NNN_description.sql.
 var migrationName = regexp.MustCompile(`^(\d+)_[a-z0-9_]+\.sql$`)

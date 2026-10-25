@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
+	"github.com/GligorcoGligorov/inspekt/internal/extract"
 	"github.com/GligorcoGligorov/inspekt/migrations"
 )
 
@@ -59,6 +62,36 @@ func contract(t *testing.T, s Store) {
 			t.Fatalf("report did not round-trip: %v %s", err, r.Report)
 		}
 	})
+	t.Run("members carry indicators and respect the window", func(t *testing.T) {
+		id := newID(t)
+		at := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+		rep := report(analyze.VerdictSuspicious, 40)
+		rep.Message.Subject = "Mailbox 98% full"
+		rep.Links = []extract.Link{{URL: "https://evil-login.xyz/a", Host: "evil-login.xyz"}}
+		if err := s.Save(ctx, Scan{ID: id, ReceivedAt: at, ScannedAt: at, Report: rep}); err != nil {
+			t.Fatal(err)
+		}
+		ms, err := s.Members(ctx, at.Add(-time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got *campaign.Member
+		for i := range ms {
+			if ms[i].ScanID == id {
+				got = &ms[i]
+			}
+		}
+		if got == nil || got.Subject != "Mailbox 98% full" || got.Verdict != analyze.VerdictSuspicious ||
+			!got.ReceivedAt.Equal(at) || len(got.Indicators) != 2 {
+			t.Fatalf("member %+v", got)
+		}
+		later, _ := s.Members(ctx, at.Add(time.Second))
+		for _, mb := range later {
+			if mb.ScanID == id {
+				t.Fatal("scan outside the window was returned")
+			}
+		}
+	})
 	t.Run("save is idempotent and keeps the first received_at", func(t *testing.T) {
 		id := newID(t)
 		first := time.Now().Add(-time.Hour)
@@ -93,7 +126,7 @@ func TestMariaDB(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 	ctx := context.Background()
-	for _, tbl := range []string{"signals", "scans", "schema_migrations"} {
+	for _, tbl := range []string{"scan_indicators", "signals", "scans", "schema_migrations"} {
 		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
 			t.Fatal(err)
 		}
@@ -118,8 +151,9 @@ func TestMariaDB(t *testing.T) {
 	}
 	var n int
 	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&n)
-	if n != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1", n)
+	files, _ := fs.Glob(migrations.FS, "*.sql")
+	if n != len(files) {
+		t.Fatalf("schema_migrations has %d rows, want %d (one per file)", n, len(files))
 	}
 
 	s := &MariaDB{DB: db}
@@ -154,6 +188,35 @@ func TestMariaDB(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+		}
+	})
+
+	// Campaign indicators are written with the scan, once: a redelivered
+	// message must not duplicate them, and created_at stays the first arrival.
+	t.Run("indicators are written once and replaced on re-save", func(t *testing.T) {
+		id := newID(t)
+		first := time.Date(2026, 10, 25, 8, 0, 0, 0, time.UTC)
+		rep := report(analyze.VerdictMalicious, 80)
+		rep.Message.Subject = "Invoice 4471 overdue"
+		rep.Links = []extract.Link{{URL: "https://login.evil-login.xyz/a", Host: "login.evil-login.xyz"}}
+		for range 3 { // redelivery
+			if err := s.Save(ctx, Scan{ID: id, ReceivedAt: first, ScannedAt: time.Now(), Report: rep}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		count := func() (n int, created time.Time) {
+			db.QueryRowContext(ctx, "SELECT COUNT(*), MIN(created_at) FROM scan_indicators WHERE scan_id = ?", id).Scan(&n, &created)
+			return
+		}
+		if n, created := count(); n != 2 || !created.Equal(first) {
+			t.Fatalf("%d indicator rows created %v, want 2 (link host + subject) at %v", n, created, first)
+		}
+		rep.Links = nil // the re-analysed result no longer has the link
+		if err := s.Save(ctx, Scan{ID: id, ReceivedAt: time.Now(), ScannedAt: time.Now(), Report: rep}); err != nil {
+			t.Fatal(err)
+		}
+		if n, created := count(); n != 1 || !created.Equal(first) {
+			t.Fatalf("after re-save: %d rows created %v, want 1 at %v", n, created, first)
 		}
 	})
 

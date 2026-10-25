@@ -72,6 +72,7 @@ type Message struct {
 	ReplyTo     *Address     `json:"reply_to,omitempty"`
 	ReturnPath  *Address     `json:"return_path,omitempty"`
 	To          []Address    `json:"to,omitempty"`
+	DeliveredTo []Address    `json:"delivered_to,omitempty"` // the mailbox the final MTA delivered to
 	AuthResults []string     `json:"authentication_results,omitempty"`
 	Received    []string     `json:"received,omitempty"`
 	TextBody    string       `json:"-"`
@@ -124,6 +125,11 @@ func Parse(r io.Reader, lim Limits) (*Message, error) {
 	}
 	msg.AuthResults = h["Authentication-Results"]
 	msg.Received = h["Received"]
+	for _, v := range h["Delivered-To"] {
+		if a, err := (&mail.AddressParser{WordDecoder: wordDecoder}).Parse(strings.TrimSpace(v)); err == nil {
+			msg.DeliveredTo = append(msg.DeliveredTo, toAddress(a))
+		}
+	}
 
 	p := &walker{lim: lim, msg: msg}
 	err = p.walk(h, m.Body, 0)

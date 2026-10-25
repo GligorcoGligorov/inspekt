@@ -46,6 +46,11 @@ func main() {
 		log.Error("config", "err", err)
 		os.Exit(2)
 	}
+	guard, err := config.CampaignGuard()
+	if err != nil {
+		log.Error("config", "err", err)
+		os.Exit(2)
+	}
 	var st store.Store
 	if dsn := config.Env("INSPEKT_MARIADB_DSN", ""); dsn != "" {
 		db, err := store.Open(dsn)
@@ -65,11 +70,12 @@ func main() {
 	srv := &http.Server{
 		Addr: config.Env("INSPEKT_ADDR", ":8080"),
 		Handler: (&api.Server{
-			Engine: analyze.New(cfg),
-			Limits: email.DefaultLimits,
-			Log:    log,
-			Queue:  q,
-			Store:  st,
+			Engine:   analyze.New(cfg),
+			Limits:   email.DefaultLimits,
+			Log:      log,
+			Queue:    q,
+			Store:    st,
+			Campaign: guard,
 		}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,

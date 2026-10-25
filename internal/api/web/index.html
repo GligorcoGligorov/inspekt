@@ -61,6 +61,11 @@ ul.hidden-runs { list-style: none; margin: 0; padding: 0; }
 ul.hidden-runs > li { border-top: 1px solid var(--border); padding: 8px 0; }
 ul.hidden-runs > li:first-child { border-top: 0; }
 .why { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--suspicious); }
+ul.campaigns { list-style: none; margin: 0; padding: 0; }
+ul.campaigns > li { border-top: 1px solid var(--border); padding: 8px 0; overflow-wrap: anywhere; }
+ul.campaigns > li:first-child { border-top: 0; }
+ul.campaigns > li.this { font-weight: 600; }
+.cid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--muted); }
 blockquote.hid { margin: 4px 0 0; padding: 6px 10px; border-left: 3px solid var(--suspicious);
   background: var(--suspicious-bg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
@@ -106,7 +111,7 @@ async function scan(file) {
   try {
     const res = await fetch("/v1/scans", { method: "POST", body: file, headers: { "Content-Type": "message/rfc822" } });
     const body = await res.json().catch(() => ({}));
-    if (res.status === 200 && body.verdict) return render(body);            // inline mode
+    if (res.status === 200 && body.verdict) return render(body, null);      // inline mode
     if (res.status === 202 || (res.status === 200 && body.id)) return poll(res.headers.get("Location") || "/v1/scans/" + body.id);
     throw new Error(body.error || "HTTP " + res.status);
   } catch (err) {
@@ -119,7 +124,7 @@ async function poll(location) {
     const res = await fetch(location);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || "HTTP " + res.status);
-    if (body.status === "done" && body.report) return render(body.report);
+    if (body.status === "done" && body.report) return render(body.report, body.id);
     if (body.status === "failed") throw new Error(body.error || "scan failed");
     setStatus("Queued, waiting for a worker…");
     await new Promise((r) => setTimeout(r, 250));
@@ -127,7 +132,8 @@ async function poll(location) {
   throw new Error("timed out waiting for the result");
 }
 
-function render(rep) {
+// scanId is known in async mode; campaigns need the result store anyway.
+function render(rep, scanId) {
   setStatus("");
   const top = el("div", "card");
   const head = el("div", "head");
@@ -199,8 +205,43 @@ function render(rep) {
     if (runs.children.length) h.append(runs);
     cards.push(h);
   }
+  const camp = el("div", "card");
+  camp.append(el("h2", null, "Campaigns (last 24 hours)"));
+  const campBody = el("p", "hidden-note", "Looking for related emails…");
+  camp.append(campBody);
+  cards.push(camp);
   result.replaceChildren(...cards);
   result.hidden = false;
+  loadCampaigns(camp, campBody, scanId);
+}
+
+// Campaigns: scans that share a link host, attachment, sending IP or subject
+// pattern. A correlation view only; it never changes a verdict.
+async function loadCampaigns(card, note, scanId) {
+  try {
+    const res = await fetch("/v1/campaigns?since=24h&min_size=2&min_verdict=clean");
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 501) { note.textContent = "Campaigns need the full stack (Redis, worker and MariaDB)."; return; }
+    if (!res.ok) throw new Error(body.error || "HTTP " + res.status);
+    const list = body.campaigns || [];
+    const mine = list.find((c) => scanId && (c.scan_ids || []).includes(scanId));
+    note.textContent = list.length + (list.length === 1 ? " campaign" : " campaigns") + " in " +
+      (body.window ? body.window.scans : 0) + " emails. " +
+      (mine ? "This email belongs to campaign " + mine.id + "." : "This email is not part of a campaign.");
+    const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const ul = el("ul", "campaigns");
+    for (const c of list.slice(0, 10)) {
+      const li = el("li", c === mine ? "this" : null);
+      const shared = (c.indicators || []).slice(0, 2).map((i) => i.value + " (" + i.kind + ")").join(", ");
+      li.append(el("span", null, c.size + " emails · first seen " + hhmm(c.first_seen) + " · last seen " +
+        hhmm(c.last_seen) + (shared ? " · shared: " + shared : "") + (c === mine ? " · this email" : "")));
+      li.append(el("span", "cid", "  " + c.id));
+      ul.append(li);
+    }
+    if (ul.children.length) card.append(ul);
+  } catch (err) {
+    note.textContent = "Could not load campaigns: " + err.message;
+  }
 }
 
 input.addEventListener("change", () => { if (input.files[0]) scan(input.files[0]); input.value = ""; });

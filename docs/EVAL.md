@@ -596,3 +596,153 @@ previous instructions", receipt with a preheader). It is not measured on
 the public corpora because they predate the threat: the phishing is from
 2019–2025 and contains no AI-assistant injection (0 of 2,049), the ham from
 2002–2003. Both sets were written by the author of the rules.
+
+## Campaign clustering, measured offline (2026-10-25)
+
+`python3 eval/campaigns.py` clusters each split with the same code as
+`GET /v1/campaigns` (`cmd/inspekt-campaigns`, `internal/campaign`; default
+guard: ignore values shared by more than max(20, 5 % of the split)). Each
+split is one window. This measures correlation only; no score or verdict
+depends on it (precision/recall/FPR unchanged at 0.9551 / 0.3943 / 0.0092,
+holdout 0.9581 / 0.3922 / 0.0088).
+
+### Raw numbers (as measured; read the next section before using them)
+
+| | dev (4,998: 1,641 phish, 3,357 ham) | holdout (1,201: 408 phish, 793 ham) |
+|---|---|---|
+| Guard limit | 249 | 60 |
+| Campaigns (2+ messages) | 233 | 84 |
+| Phishing in a multi-email campaign | 1,160 (70.69 %) | 217 (53.19 %) |
+| Campaign-assisted recall: missed phish sharing a campaign with caught phish | 485 of 993 missed (48.84 %); recall 0.3949 → 0.6904 if all were followed up | 71 of 248 missed (28.63 %); 0.3922 → 0.5662 |
+| Ham contamination: ham in a campaign with phishing | 2,405 of 3,357 (71.64 %) | 473 of 793 (59.65 %) |
+| Campaigns mixing ham and phishing | 1 | 1 |
+| Values dropped by the guard | link_host 5, sender_ip 4 | link_host 4, sender_ip 3 |
+| Distinct values (attachment / link host / sender IP / subject) | 400 / 2,188 / 1,515 / 3,056 | 112 / 740 / 439 / 917 |
+
+Five largest campaigns:
+
+| Split | Size | Phish / ham | Top shared indicator | Example subject |
+|---|---|---|---|---|
+| dev | 3,257 | 852 / 2,405 | sender_ip 212.17.35.15 (236) | "[zzzzteana] RE: Alexander" |
+| dev | 26 | 0 / 26 | link_host askbjoernhansen.com (26) | "Yoga & Painfree Bliss" |
+| dev | 24 | 24 / 0 | link_host doubleclick.net (16) | "New Scanned document from Monkey Office Printer" |
+| dev | 17 | 17 / 0 | link_host req675secuere.ru (4) | "Important Monetary Online Document." |
+| dev | 17 | 0 / 17 | subject_fp 34a2d88fd97e (10) | "Re: RH 8 no DMA for DVD drive" |
+| holdout | 577 | 104 / 473 | sender_ip 193.172.5.4 (58) | "Re: New Sequences Window" |
+| holdout | 48 | 0 / 48 | link_host newsisfree.com (48) | "Tough Earth bug may be from Mars" |
+| holdout | 17 | 0 / 17 | subject_fp 28dcc66e9021 (7) | "[Spambayes] test sets?" |
+| holdout | 14 | 0 / 14 | subject_fp b6b82871930f (4) | "[zzzzteana] Which Muppet Are You?" |
+| holdout | 11 | 11 / 0 | link_host rebrand.ly (7) | "Unlock your Welsfargo account now" |
+
+### What the numbers actually say: one giant chain, not campaigns
+
+The largest "campaign" in each split is not an attack: 3,257 of 4,998 dev
+messages (and 577 holdout) sit in one component, linked by mailing-list
+relays and common hosts. Almost all of the headline campaign-assisted
+recall and ham contamination comes from that single component, so **both
+headline numbers are artifacts and must not be read as the value of
+correlation**. The smaller campaigns look real (24 "scanned document"
+phish via the same click-tracking host, 17 phish to one `.ru` host,
+mailing-list threads on the ham side).
+
+Diagnosis on the dev split (dev data, after the run):
+
+1. **The guard is per value, the problem is per component.** No single
+   value exceeds the limit (249), but union-find is transitive: 244 sender
+   IPs are shared by 2+ messages (82 only within ham, 2002 mailing-list
+   relays; 162 only within phishing), and they chain thousands of
+   messages through many sub-threshold values.
+2. **Public suffixes counted as domains.** `co.za`, `co.il`, `ne.jp`,
+   `org.tw` appear as link hosts: the built-in suffix table (a known
+   limitation) does not list them, so every `.co.za` site is "the same
+   domain". 
+3. **Generic and self domains bridge ham and phishing.** All 14 values
+   carried by both classes are link hosts: `monkey.org` (the phishing
+   corpus owner's own domain, 10 ham / 10 phish), `co.za`, `sf.net`,
+   `tinyurl.com`, `adobe.com`, `mit.edu`, `tripod.com`, `aol.com` and others.
+
+Nothing was tuned in response. Fixing this is a design decision (for
+example: the full Public Suffix List, a cap on component size or on how
+many scans one value may join, excluding `sender_ip` or requiring two
+shared indicators); each option would be measured the same way.
+
+### Redesign, decided before measuring (round 2)
+
+Four changes, chosen from the diagnosis above and not tuned on any number:
+
+1. **Strong vs weak indicators.** Strong (one shared value links two
+   emails): `attachment_sha256`, and `full_url` (scheme://host/path,
+   query dropped) for links to URL shorteners and abusable hosting,
+   replacing the bare host there. Weak (`link_host`, `sender_ip`,
+   `subject_fp`): two emails are linked only if they share weak values of
+   **at least two different kinds**. The per-value guard still applies.
+2. **Full Public Suffix List** (`golang.org/x/net/publicsuffix`) inside
+   campaign extraction only. Scoring keeps its own `RegistrableDomain`, so
+   the evaluation is unchanged (0.9551 / 0.3943 / 0.0092, holdout 0.9581 /
+   0.3922 / 0.0088, verified after each commit).
+3. **Recipient exclusion:** link hosts in a recipient's own domain (`To`,
+   `Delivered-To`) are ignored; no corpus-specific allowlisting.
+4. **Hard cap:** clusters above 500 are marked oversized ("likely shared
+   infrastructure"), reported separately and left out of the two headline
+   numbers.
+
+Dev was measured first (2026-10-25 00:40:22 UTC), the holdout once
+afterwards (00:40:43 UTC), with no change in between. A read-only view of
+the largest phishing campaigns was added afterwards; re-running both splits
+reproduced every number below exactly.
+
+| | dev (1,641 phish, 3,357 ham) | holdout (408 phish, 793 ham) |
+|---|---|---|
+| Guard limit | 249 | 60 |
+| Campaigns (2+ messages) | 395 | 77 |
+| Campaigns that are 100 % phishing | 179 | 22 |
+| Oversized clusters (> 500) | 0 | 0 |
+| Phishing in a multi-email campaign | 501 (30.53 %) | 51 (12.50 %) |
+| **Campaign-assisted recall** | **82 of 993 missed (8.26 %)**; recall 0.3949 → 0.4449 if all were followed up | **9 of 248 missed (3.63 %)**; 0.3922 → 0.4142 |
+| **Ham sharing a campaign with phishing** | **0 of 3,357 (0.00 %)** | **0 of 793 (0.00 %)** |
+| Campaigns mixing ham and phishing | 0 | 0 |
+| Values dropped by the guard | link_host 2, sender_ip 4 | link_host 1, sender_ip 3 |
+
+Five largest clusters overall (all legitimate mailing-list or newsletter
+mail, linked by the list's relay plus the same subject pattern or link
+domain; correctly grouped, but not attacks, and hidden by the API's default
+`min_verdict=suspicious`):
+
+| Split | Size | Phish / ham | Top shared indicator | Example subject |
+|---|---|---|---|---|
+| dev | 174 | 0 / 174 | sender_ip 66.187.233.211 (159) | "Re: New Sequences Window" |
+| dev | 116 | 0 / 116 | link_host perl.org (60) | "[use Perl] Headlines for 2002-08-30" |
+| dev | 65 | 0 / 65 | sender_ip 193.120.211.219 (59) | "Re: use of base image / delta image …" |
+| dev | 38 | 0 / 38 | sender_ip 212.17.35.15 (38) | "Re: [Razor-users] Re: revoke problem" |
+| dev | 34 | 0 / 34 | sender_ip 212.17.35.15 (29) | "When a Crop Becomes King" |
+| holdout | 44 | 0 / 44 | sender_ip 66.187.233.211 (44) | "Re: New Sequences Window" |
+| holdout | 14 | 0 / 14 | link_host perl.org (14) | "[use Perl] Stories for 2002-08-27" |
+| holdout | 13 | 0 / 13 | link_host thinkgeek.com (10) | "Re: [ILUG] windows users accessing cvs…" |
+| holdout | 13 | 0 / 13 | link_host linux.ie (9) | "Re: [ILUG-Social] Completely OT, Siamese Cats???" |
+| holdout | 13 | 0 / 13 | sender_ip 212.17.35.15 (13) | "[Razor-users] Razor Server Error" |
+
+Five largest campaigns containing phishing (all 100 % phishing):
+
+| Split | Size | Top shared indicator | Example subject |
+|---|---|---|---|
+| dev | 11 | link_host doubleclick.net (11) | "Important: Email Service Alert" |
+| dev | 10 | subject_fp 7db058c3094d (10) | "We're having some trouble with your current billing informat…" |
+| dev | 9 | link_host docusign.com (9) | "Payment Received [PP190208843783] Geek^^Squad® …" |
+| dev | 8 | link_host sendgrid.net (8) | "jose@monkey.org received a share document via Onedrive" |
+| dev | 7 | subject_fp c096475b008c (7) | "Netflix : We're having some trouble with your current billin…" |
+| holdout | 5 | subject_fp aed34186cdba (5) | "Last reminder : Your membership will be cenceled tomorrow" |
+| holdout | 5 | link_host doubleclick.net (5) | "Employee's Confirmation Required From monkey.org" |
+| holdout | 3 | link_host esy.es (3) | "(1) Pending PMM Message" |
+| holdout | 2 | link_host mcgrathteam.net (2) | "One Time Password Authentication Required" |
+| holdout | 2 | link_host evolui.eco.br (2) | "Security Update" |
+
+**Reading.** The giant chain is gone: no cluster near the cap, no
+campaign mixes ham and phishing, and the phishing campaigns are real
+attacks (billing-problem lures, fake DocuSign receipts, OneDrive shares).
+Campaign-assisted recall is modest and honest: following campaigns would
+surface 82 dev and 9 holdout missed phishing emails. Two caveats: **the
+0 % contamination is flattered by the corpus**, whose 2002 ham and
+2019–2025 phishing can hardly share a subject pattern plus a host or IP,
+so modern legitimate mail (newsletters on the same ESP as phishing) is the
+real test; and the stricter rule now misses campaigns whose emails share
+only one weak indicator (for example, only a link domain).
