@@ -2,6 +2,7 @@ package campaign
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
@@ -69,8 +70,8 @@ func TestExtract(t *testing.T) {
 		[]string{"from out.sender.example ([151.101.1.69]) by mx"}, "aa11", "aa11"))
 	want := []Indicator{
 		{AttachmentSHA, "aa11"},
+		{FullURL, "https://pub-1.r2.dev/p"}, // shared hosting: the page, not the host
 		{LinkHost, "evil-login.xyz"},
-		{LinkHost, "r2.dev"}, // abused hosting is not allowlisted
 		{SenderIP, "151.101.1.69"},
 		{SubjectFP, sha("invoice # overdue")},
 	}
@@ -104,4 +105,39 @@ func TestAllowlist(t *testing.T) {
 
 func sha(s string) string {
 	return Extract(&analyze.Report{Message: &email.Message{Subject: s}})[0].Value
+}
+
+func TestDomainUsesFullPublicSuffixList(t *testing.T) {
+	for host, want := range map[string]string{
+		"shop.co.za": "shop.co.za", "www.bank.co.za": "bank.co.za", "co.za": "",
+		"mail.example.co.il": "example.co.il", "a.b.ne.jp": "b.ne.jp", "login.evil-login.xyz": "evil-login.xyz",
+		"151.101.1.69": "151.101.1.69", "": "",
+	} {
+		if got := Domain(host); got != want {
+			t.Errorf("Domain(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
+func TestExtractStrongAndExclusions(t *testing.T) {
+	rep := report("Hello there friend",
+		[]string{"https://bit.ly/3xYz?utm=1#top", "https://www.monkey.org/~jose/unsub", "https://shop.co.za/a", "https://bank.co.za/b"}, nil)
+	rep.Message.To = []email.Address{{Email: "jose@monkey.org", Domain: "monkey.org"}}
+	got := fmt.Sprint(Extract(rep))
+	for _, want := range []string{"{full_url https://bit.ly/3xYz}", "{link_host shop.co.za}", "{link_host bank.co.za}"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "monkey.org") || strings.Contains(got, "{link_host co.za}") || strings.Contains(got, "bit.ly}") {
+		t.Errorf("recipient domain, public suffix or bare shortener host leaked: %s", got)
+	}
+	rep.Message.To = nil
+	rep.Message.DeliveredTo = []email.Address{{Email: "jose@monkey.org", Domain: "monkey.org"}}
+	if strings.Contains(fmt.Sprint(Extract(rep)), "monkey.org") {
+		t.Error("Delivered-To domain not excluded")
+	}
+	if !Strong(AttachmentSHA) || !Strong(FullURL) || Strong(LinkHost) || Strong(SenderIP) || Strong(SubjectFP) {
+		t.Error("strong/weak classification")
+	}
 }

@@ -107,3 +107,13 @@ func FuzzParse(f *testing.F) {
 		_, _ = Parse(strings.NewReader(raw), Limits{MaxBytes: 1 << 16, MaxParts: 20, MaxDepth: 5})
 	})
 }
+
+func TestDeliveredTo(t *testing.T) {
+	m, err := Parse(strings.NewReader("Delivered-To: jose@monkey.org\r\nDelivered-To: not an address\r\nTo: x@example.org\r\nSubject: s\r\n\r\nb"), DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.DeliveredTo) != 1 || m.DeliveredTo[0].Domain != "monkey.org" {
+		t.Fatalf("delivered-to %+v", m.DeliveredTo)
+	}
+}

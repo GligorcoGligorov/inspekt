@@ -10,22 +10,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 
+	"golang.org/x/net/publicsuffix"
+
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/email"
 )
 
-// Indicator kinds.
+// Indicator kinds. Strong kinds link two scans on their own; weak kinds
+// only together with a second, different weak kind (see Cluster).
 const (
-	LinkHost       = "link_host"
-	AttachmentSHA  = "attachment_sha256"
-	SenderIP       = "sender_ip"
-	SubjectFP      = "subject_fp"
-	maxIndicators  = 100 // per scan; a 500-link newsletter must not write 500 rows
-	maxValueLength = 255 // the column size
-	minSubjectLen  = 8   // characters after normalising
+	AttachmentSHA  = "attachment_sha256" // strong: the same file
+	FullURL        = "full_url"          // strong: the same page on a shortener or shared hosting
+	LinkHost       = "link_host"         // weak
+	SenderIP       = "sender_ip"         // weak
+	SubjectFP      = "subject_fp"        // weak
+	maxIndicators  = 100                 // per scan; a 500-link newsletter must not write 500 rows
+	maxValueLength = 255                 // the column size
+	minSubjectLen  = 8                   // characters after normalising
 )
 
 // Indicator is one correlatable value of a scan.
@@ -46,6 +52,43 @@ var Allowlist = map[string]bool{
 	"youtu.be": true, "whatsapp.com": true, "bing.com": true, "yahoo.com": true,
 }
 
+// Strong reports whether one shared value of this kind links two scans.
+func Strong(kind string) bool { return kind == AttachmentSHA || kind == FullURL }
+
+// Domain is the registrable domain by the full Public Suffix List
+// (golang.org/x/net/publicsuffix), so "shop.co.za" and "bank.co.za" are
+// different domains. Campaign extraction only: the scoring checks keep
+// analyze.RegistrableDomain, so this cannot move a verdict.
+func Domain(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" {
+		return ""
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return host
+	}
+	d, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return "" // a public suffix itself (co.za) identifies nobody
+	}
+	return d
+}
+
+// fullURL is scheme://host/path with the query, fragment and user info
+// dropped: the same phishing page, whatever tracking parameters it carries.
+func fullURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	v := strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host) + u.EscapedPath()
+	if len(v) > maxValueLength {
+		sum := sha256.Sum256([]byte(v))
+		return "sha256:" + hex.EncodeToString(sum[:])
+	}
+	return v
+}
+
 // Extract returns the de-duplicated, sorted indicators of one analysed message.
 func Extract(rep *analyze.Report) []Indicator {
 	seen := map[Indicator]bool{}
@@ -60,8 +103,24 @@ func Extract(rep *analyze.Report) []Indicator {
 			out = append(out, ind)
 		}
 	}
+	// The recipient's own domain shows up in links (unsubscribe pages,
+	// personalised URLs); it says who received the mail, not who sent it.
+	recipient := map[string]bool{}
+	if msg := rep.Message; msg != nil {
+		for _, a := range append(append([]email.Address{}, msg.To...), msg.DeliveredTo...) {
+			if d := Domain(a.Domain); d != "" {
+				recipient[d] = true
+			}
+		}
+	}
 	for _, l := range rep.Links {
-		if d := analyze.RegistrableDomain(l.Host); d != "" && !Allowlist[d] {
+		// On shorteners and shared hosting the host is shared by everyone;
+		// the page is what identifies the campaign.
+		if analyze.IsShortener(l.Host) || analyze.AbusedHosting(l) != "" {
+			add(FullURL, fullURL(l.URL))
+			continue
+		}
+		if d := Domain(l.Host); d != "" && !Allowlist[d] && !recipient[d] {
 			add(LinkHost, d)
 		}
 	}
