@@ -160,11 +160,12 @@ flowchart LR
 | `internal/store` | `Store` interface; MariaDB (upsert, signals table, migrations under a named lock) and in-memory |
 | `internal/pipeline` | What a worker does with a job: analyse, then save |
 | `internal/llm` | Optional grey-zone reviewer: data minimisation, OpenAI-compatible client, per-minute and daily budget, 429 pause |
+| `internal/campaign` | Campaign indicators, union-find clustering with a giant-cluster guard |
 | `internal/config` | `INSPEKT_*` environment shared by CLI, API and worker |
 | `internal/metrics` | Prometheus metrics shared by API and worker; queue gauges read from Redis at scrape time |
 | `deploy/` | Prometheus scrape config, Grafana datasource and dashboard (provisioned) |
 | `migrations/` | Numbered SQL files, embedded in the binaries and applied at startup |
-| `cmd/` | `inspekt` (CLI), `inspekt-api`, `inspekt-worker`, `inspekt-load` (load generator) |
+| `cmd/` | `inspekt` (CLI), `inspekt-api`, `inspekt-worker`, `inspekt-load` (load generator), `inspekt-campaigns` (offline campaign measurement) |
 | `eval/` | Corpus fetch (pinned), held-out split, precision / recall / FPR, analysis, CI gates |
 
 ## Detection quality
@@ -336,6 +337,84 @@ mostly plain text, so the false-positive cost on modern HTML mail is not
 measured. The AI-injection signal is informational until it can be
 measured on modern labelled mail (real injection attempts and real
 legitimate mail that talks about AI); only then would it earn points.
+
+## Campaigns (v0.7, correlation only)
+
+Scans that come from the same attack are grouped into **campaigns**, the way
+a threat-intel platform correlates detections. This is a correlation layer
+only: it never changes a score or a verdict (the evaluation numbers above
+are identical with and without it).
+
+**Design.**
+
+- For each finished scan, `internal/campaign` extracts indicators: the
+  registrable domain of every link (minus an allowlist of huge benign
+  platforms; abused hosting is not allowlisted), attachment SHA-256s, the
+  first public IP in the `Received` "from" clauses, and a fingerprint of the
+  normalised subject (lowercase, `re:`/`fw:` removed, digit runs → `#`).
+  They are stored in `scan_indicators` (migration 002) **in the same
+  transaction** as the result, so a redelivered message never duplicates
+  them.
+- On read, union-find groups all scans of the window: two scans are in one
+  campaign if they share an indicator, directly or through other scans.
+  Missed phishing therefore joins its caught siblings; `min_verdict` then
+  filters campaigns by their highest member.
+- A guard ignores any value shared by more than max(20, 5 % of the window)
+  scans (`INSPEKT_CAMPAIGN_MAX_SHARED`, `INSPEKT_CAMPAIGN_MAX_SHARE`).
+- The campaign id is a short hash of the smallest scan id, so it is stable.
+
+```bash
+$ curl -s 'localhost:8080/v1/campaigns?since=24h&min_size=2&min_verdict=suspicious' | jq '.campaigns[0]'
+# abridged, from a local run with three related test emails
+{
+  "id": "f6448aa1f93c",
+  "size": 3,
+  "first_seen": "…",
+  "last_seen": "…",
+  "verdicts": {"suspicious": 3},
+  "max_verdict": "suspicious",
+  "indicators": [
+    {"kind": "link_host", "value": "evil-login.xyz", "scans": 3},
+    {"kind": "subject_fp", "value": "a52950d42f9e", "scans": 3}
+  ],
+  "subjects": ["Your mailbox is full (141 messages held)", "..."],
+  "scan_ids": ["3c0e…", "…"]
+}
+```
+
+`since` accepts `90m`, `24h` or `7d` (capped at 30 days); the response also
+reports the window, the guard limit and how many values it dropped.
+Prometheus: `inspekt_campaign_query_duration_seconds`,
+`inspekt_campaigns_returned`. The demo page shows a Campaigns panel under
+each result.
+
+**Measured on the public corpora** (`python3 eval/campaigns.py`,
+[`docs/EVAL.md`](docs/EVAL.md)), honestly: **the headline numbers are
+artifacts.** On the dev split one component holds 3,257 of 4,998 messages
+(852 phishing, 2,405 ham), chained by mailing-list relay IPs, public
+suffixes counted as domains and generic hosts. It alone produces the
+"campaign-assisted recall" (485 of 993 missed phishing share a campaign
+with caught phishing) and the "ham contamination" (71.64 % of ham sits
+with phishing). Holdout: one component of 577; 71 of 248 missed phishing
+assisted; 59.65 % of ham contaminated. The smaller campaigns look real (24
+"scanned document" phishing emails behind one click-tracking host, 17 to
+one `.ru` host).
+
+**Limitations.**
+
+- **Transitive chaining.** The guard limits how many scans one value may
+  link, not how large a component may grow; many sub-threshold values
+  (relay IPs) still chain thousands of unrelated messages. Fixes to
+  measure next: the full Public Suffix List, a component-size cap,
+  dropping `sender_ip` or requiring two shared indicators.
+- **Public suffixes.** The small built-in suffix table counts `co.za`,
+  `co.il`, `ne.jp` as domains, which links unrelated sites.
+- **Compute-on-read** reads and clusters the whole window per request:
+  fine up to roughly 100k scans per window, beyond that the query and
+  memory grow with the window. The fix is materialised clusters (update
+  the union-find incrementally as each scan is saved) or a streaming job.
+- The corpora have no real time window (2002 ham, 2019–2025 phishing), so
+  each split was clustered as one window.
 
 ## Observability
 

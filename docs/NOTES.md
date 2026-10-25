@@ -835,3 +835,100 @@ recall improves while false positives stay under 1 %.
    content is shown to analysts, and with a corpus containing real
    injection attempts (or opt-in production samples) the detector can be
    measured and switched on the same way the other checks were.
+
+---
+
+## Campaigns (v0.7): correlating scans
+
+### What a campaign is
+
+One attacker rarely sends one email. They send hundreds: the same fake
+login page, the same attachment, a subject like "Invoice 4471 overdue" with
+a different number each time. A **campaign** is that group. Seeing it lets
+an analyst say "these 40 emails are one attack", and if the rules caught 30
+of them, the other 10 are suspicious too, even though each one alone looked
+clean.
+
+Inspekt finds campaigns through shared **indicators**: the link's domain,
+the attachment's hash, the sending server's IP, and a "fingerprint" of the
+subject (numbers replaced by `#`, so "Invoice 4471" and "Invoice 12" match).
+
+### Why union-find
+
+If email A shares a link with B, and B shares an IP with C, then A, B and C
+are one campaign, even though A and C share nothing directly. Union-find is
+the standard way to build such groups: it keeps one "leader" per group, and
+joining two groups or asking "which group is X in?" takes almost constant
+time. So clustering 5,000 emails takes milliseconds.
+
+### Why the giant-cluster guard
+
+Some values are shared by everyone: a big mail provider's server, a link to
+a popular site. If those counted, everything would be "one campaign". So a
+value shared by more than max(20, 5 % of the emails) is ignored.
+
+**What the measurement taught us:** that is not enough. The guard checks
+each value alone, but union-find chains: two hundred emails through relay
+IP one, one of which shares relay IP two with a hundred more, and so on.
+On the public data this built one "campaign" of 3,257 emails, mostly
+2002 mailing-list mail. The fix is a design decision we have not made yet
+(cap the size of a group, use the full public-suffix list, require two
+shared indicators, or drop the IP).
+
+### Why compute-on-read, and when it stops scaling
+
+Every request reads the window's indicators from MariaDB and builds the
+groups in memory. That is simple and always correct (no stored groups to go
+stale), and fine up to roughly 100,000 emails per window. Past that, every
+request does more work and holds more in memory. Then you store the groups
+instead: update them as each email is saved, or run a streaming job.
+
+### How to read the two numbers
+
+- **Campaign-assisted recall:** phishing the rules *missed* that sits in a
+  campaign with phishing the rules *caught*. It says how many misses an
+  analyst could find by following campaigns. It is not a detection rate:
+  nothing flags those emails automatically.
+- **Ham contamination:** legitimate email that ends up in a campaign
+  together with phishing. If this is high, following campaigns would drag
+  innocent mail into an investigation.
+
+On our data both are inflated by the one giant chain (48.8 % of missed
+phishing "assisted", 71.6 % of ham "contaminated" on dev), so the honest
+reading is: the mechanism works on real campaigns (we saw groups of 24 and
+17 genuine phishing emails), but the grouping rules need fixing before the
+numbers mean anything.
+
+### Interview questions
+
+1. **"How do you group emails into campaigns, and why union-find?"**
+   Each email gives indicators (link domains, attachment hashes, sending
+   IP, subject fingerprint). Two emails are in one campaign if they share
+   one, directly or through a chain. Union-find builds exactly those
+   connected groups in near-linear time, without building a graph.
+
+2. **"What goes wrong with naive clustering on real mail?"**
+   Shared infrastructure. A popular link or a provider's IP connects
+   unrelated mail, and because grouping is transitive, a few such values
+   merge everything. A per-value threshold helps, but our measurement
+   showed it is not enough: a chain of many medium-common values still
+   made one group of 3,257 emails. You need a limit on the group, not
+   just on the value, and good normalisation (the public-suffix list).
+
+3. **"Your 'campaign-assisted recall' was 48.8 %. Why don't you claim it?"**
+   Because almost all of it came from that giant artifact group. Reporting
+   it as a win would be fitting a story to a bug. I report the raw number,
+   explain why it is an artifact, and propose fixes to measure next.
+
+4. **"Why compute campaigns on read instead of storing them?"**
+   It is simple and can never be stale or inconsistent: the indicators are
+   the truth, the groups are derived. It costs work per request, which is
+   fine up to about 100k emails per window. Past that, I would maintain
+   the groups incrementally as scans are saved, or with a streaming job.
+
+5. **"How do you stop a redelivered message from changing campaigns?"**
+   The indicators are written in the same database transaction as the
+   scan result, keyed by (scan, kind, value). A redelivered message has
+   the same scan id (the hash of the message), so it rewrites the same
+   rows instead of adding new ones; the end-to-end test re-posts a
+   message and checks the campaign stays the same size.
