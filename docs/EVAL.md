@@ -596,3 +596,72 @@ previous instructions", receipt with a preheader). It is not measured on
 the public corpora because they predate the threat: the phishing is from
 2019–2025 and contains no AI-assistant injection (0 of 2,049), the ham from
 2002–2003. Both sets were written by the author of the rules.
+
+## Campaign clustering, measured offline (2026-10-25)
+
+`python3 eval/campaigns.py` clusters each split with the same code as
+`GET /v1/campaigns` (`cmd/inspekt-campaigns`, `internal/campaign`; default
+guard: ignore values shared by more than max(20, 5 % of the split)). Each
+split is one window. This measures correlation only; no score or verdict
+depends on it (precision/recall/FPR unchanged at 0.9551 / 0.3943 / 0.0092,
+holdout 0.9581 / 0.3922 / 0.0088).
+
+### Raw numbers (as measured; read the next section before using them)
+
+| | dev (4,998: 1,641 phish, 3,357 ham) | holdout (1,201: 408 phish, 793 ham) |
+|---|---|---|
+| Guard limit | 249 | 60 |
+| Campaigns (2+ messages) | 233 | 84 |
+| Phishing in a multi-email campaign | 1,160 (70.69 %) | 217 (53.19 %) |
+| Campaign-assisted recall: missed phish sharing a campaign with caught phish | 485 of 993 missed (48.84 %); recall 0.3949 → 0.6904 if all were followed up | 71 of 248 missed (28.63 %); 0.3922 → 0.5662 |
+| Ham contamination: ham in a campaign with phishing | 2,405 of 3,357 (71.64 %) | 473 of 793 (59.65 %) |
+| Campaigns mixing ham and phishing | 1 | 1 |
+| Values dropped by the guard | link_host 5, sender_ip 4 | link_host 4, sender_ip 3 |
+| Distinct values (attachment / link host / sender IP / subject) | 400 / 2,188 / 1,515 / 3,056 | 112 / 740 / 439 / 917 |
+
+Five largest campaigns:
+
+| Split | Size | Phish / ham | Top shared indicator | Example subject |
+|---|---|---|---|---|
+| dev | 3,257 | 852 / 2,405 | sender_ip 212.17.35.15 (236) | "[zzzzteana] RE: Alexander" |
+| dev | 26 | 0 / 26 | link_host askbjoernhansen.com (26) | "Yoga & Painfree Bliss" |
+| dev | 24 | 24 / 0 | link_host doubleclick.net (16) | "New Scanned document from Monkey Office Printer" |
+| dev | 17 | 17 / 0 | link_host req675secuere.ru (4) | "Important Monetary Online Document." |
+| dev | 17 | 0 / 17 | subject_fp 34a2d88fd97e (10) | "Re: RH 8 no DMA for DVD drive" |
+| holdout | 577 | 104 / 473 | sender_ip 193.172.5.4 (58) | "Re: New Sequences Window" |
+| holdout | 48 | 0 / 48 | link_host newsisfree.com (48) | "Tough Earth bug may be from Mars" |
+| holdout | 17 | 0 / 17 | subject_fp 28dcc66e9021 (7) | "[Spambayes] test sets?" |
+| holdout | 14 | 0 / 14 | subject_fp b6b82871930f (4) | "[zzzzteana] Which Muppet Are You?" |
+| holdout | 11 | 11 / 0 | link_host rebrand.ly (7) | "Unlock your Welsfargo account now" |
+
+### What the numbers actually say: one giant chain, not campaigns
+
+The largest "campaign" in each split is not an attack: 3,257 of 4,998 dev
+messages (and 577 holdout) sit in one component, linked by mailing-list
+relays and common hosts. Almost all of the headline campaign-assisted
+recall and ham contamination comes from that single component, so **both
+headline numbers are artifacts and must not be read as the value of
+correlation**. The smaller campaigns look real (24 "scanned document"
+phish via the same click-tracking host, 17 phish to one `.ru` host,
+mailing-list threads on the ham side).
+
+Diagnosis on the dev split (dev data, after the run):
+
+1. **The guard is per value, the problem is per component.** No single
+   value exceeds the limit (249), but union-find is transitive: 244 sender
+   IPs are shared by 2+ messages (82 only within ham, 2002 mailing-list
+   relays; 162 only within phishing), and they chain thousands of
+   messages through many sub-threshold values.
+2. **Public suffixes counted as domains.** `co.za`, `co.il`, `ne.jp`,
+   `org.tw` appear as link hosts: the built-in suffix table (a known
+   limitation) does not list them, so every `.co.za` site is "the same
+   domain". 
+3. **Generic and self domains bridge ham and phishing.** All 14 values
+   carried by both classes are link hosts: `monkey.org` (the phishing
+   corpus owner's own domain, 10 ham / 10 phish), `co.za`, `sf.net`,
+   `tinyurl.com`, `adobe.com`, `mit.edu`, `tripod.com`, `aol.com` and others.
+
+Nothing was tuned in response. Fixing this is a design decision (for
+example: the full Public Suffix List, a cap on component size or on how
+many scans one value may join, excluding `sender_ip` or requiring two
+shared indicators); each option would be measured the same way.
