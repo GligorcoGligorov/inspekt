@@ -23,6 +23,9 @@ type Store interface {
 	Save(ctx context.Context, s Scan) error
 	Get(ctx context.Context, id string) (*Record, error)
 	Ping(ctx context.Context) error
+	// Members returns every scan received since the given time with its
+	// campaign indicators, for clustering (internal/campaign).
+	Members(ctx context.Context, since time.Time) ([]campaign.Member, error)
 }
 
 // Scan is one finished analysis to save.
@@ -93,3 +96,21 @@ func (m *Memory) Get(_ context.Context, id string) (*Record, error) {
 }
 
 func (m *Memory) Ping(context.Context) error { return nil }
+
+func (m *Memory) Members(_ context.Context, since time.Time) ([]campaign.Member, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []campaign.Member
+	for id, r := range m.recs {
+		if r.ReceivedAt.Before(since) {
+			continue
+		}
+		var rep struct {
+			Message struct{ Subject string } `json:"message"`
+		}
+		json.Unmarshal(r.Report, &rep)
+		out = append(out, campaign.Member{ScanID: id, ReceivedAt: r.ReceivedAt, Verdict: r.Verdict,
+			Subject: rep.Message.Subject, Indicators: m.inds[id]})
+	}
+	return out, nil
+}

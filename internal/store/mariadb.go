@@ -167,6 +167,41 @@ func (m *MariaDB) Get(ctx context.Context, id string) (*Record, error) {
 
 func (m *MariaDB) Ping(ctx context.Context) error { return m.DB.PingContext(ctx) }
 
+// Members reads the scans received since a time with their indicators. It
+// reads only what clustering needs (id, time, verdict, subject from the
+// report JSON), never whole reports. Compute-on-read: fine for a window of
+// tens of thousands of scans; beyond that, clusters should be materialised.
+func (m *MariaDB) Members(ctx context.Context, since time.Time) ([]campaign.Member, error) {
+	rows, err := m.DB.QueryContext(ctx, `
+		SELECT s.id, s.received_at, s.verdict,
+		       COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.report, '$.message.subject')), ''),
+		       i.kind, i.value
+		FROM scans s
+		LEFT JOIN scan_indicators i ON i.scan_id = s.id
+		WHERE s.received_at >= ?
+		ORDER BY s.id`, since.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []campaign.Member
+	for rows.Next() {
+		var mb campaign.Member
+		var kind, value sql.NullString
+		if err := rows.Scan(&mb.ScanID, &mb.ReceivedAt, &mb.Verdict, &mb.Subject, &kind, &value); err != nil {
+			return nil, err
+		}
+		if n := len(out); n == 0 || out[n-1].ScanID != mb.ScanID {
+			out = append(out, mb)
+		}
+		if kind.Valid {
+			last := &out[len(out)-1]
+			last.Indicators = append(last.Indicators, campaign.Indicator{Kind: kind.String, Value: value.String})
+		}
+	}
+	return out, rows.Err()
+}
+
 // migrationName matches NNN_description.sql.
 var migrationName = regexp.MustCompile(`^(\d+)_[a-z0-9_]+\.sql$`)
 

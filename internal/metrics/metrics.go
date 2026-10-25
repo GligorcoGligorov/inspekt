@@ -49,6 +49,14 @@ var (
 		Name: "inspekt_llm_duration_seconds", Help: "Time per grey-zone LLM review, including failures.",
 		Buckets: prometheus.ExponentialBuckets(0.05, 2, 9)}) // 50 ms .. 12.8 s
 
+	// Campaigns (correlation view, GET /v1/campaigns).
+	CampaignQueryDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "inspekt_campaign_query_duration_seconds", Help: "Time to read a window and cluster it into campaigns.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14)}) // 1 ms .. ~8 s
+	CampaignsReturned = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "inspekt_campaigns_returned", Help: "Campaigns returned per query.",
+		Buckets: []float64{0, 1, 2, 5, 10, 20, 50, 100, 500}})
+
 	// API.
 	ScanFailures = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "inspekt_scan_failures_total", Help: "Requests rejected by the API (bad input, too large, queue unavailable)."})

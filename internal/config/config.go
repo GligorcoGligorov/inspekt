@@ -15,6 +15,7 @@ import (
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
 	"github.com/GligorcoGligorov/inspekt/internal/auth"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 	"github.com/GligorcoGligorov/inspekt/internal/llm"
 	"github.com/GligorcoGligorov/inspekt/internal/metrics"
 )
@@ -116,6 +117,25 @@ func LLM() string {
 		return "off"
 	}
 	return os.Getenv("INSPEKT_LLM_MODEL") + " @ " + os.Getenv("INSPEKT_LLM_BASE_URL")
+}
+
+// CampaignGuard reads the giant-cluster guard: indicator values shared by
+// more than max(INSPEKT_CAMPAIGN_MAX_SHARED, INSPEKT_CAMPAIGN_MAX_SHARE ×
+// scans in the window) are ignored (defaults 20 and 0.05).
+func CampaignGuard() (campaign.Options, error) {
+	n, err := Int("INSPEKT_CAMPAIGN_MAX_SHARED", 20)
+	if err != nil {
+		return campaign.Options{}, err
+	}
+	share := 0.05
+	if v := os.Getenv("INSPEKT_CAMPAIGN_MAX_SHARE"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f <= 0 || f > 1 {
+			return campaign.Options{}, fmt.Errorf("INSPEKT_CAMPAIGN_MAX_SHARE must be in (0, 1], got %q", v)
+		}
+		share = f
+	}
+	return campaign.Options{MaxShared: n, MaxShare: share}, nil
 }
 
 // AuthMode is INSPEKT_AUTH_MODE with its default applied.

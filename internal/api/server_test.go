@@ -339,3 +339,86 @@ func TestDemoPageContract(t *testing.T) {
 		t.Fatalf("report shape changed: %+v", rep)
 	}
 }
+
+func getJSON(t *testing.T, url string, v any) int {
+	t.Helper()
+	res, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if v != nil {
+		json.NewDecoder(res.Body).Decode(v)
+	}
+	return res.StatusCode
+}
+
+func TestCampaignsValidation(t *testing.T) {
+	ts, _ := asyncStack(t)
+	for q, want := range map[string]int{
+		"":                                200,
+		"?since=90m&min_size=3":           200,
+		"?since=7d&min_verdict=malicious": 200,
+		"?since=bogus":                    400,
+		"?since=-1h":                      400,
+		"?since=0d":                       400,
+		"?min_size=1":                     400,
+		"?min_size=x":                     400,
+		"?min_verdict=evil":               400,
+	} {
+		if got := getJSON(t, ts.URL+"/v1/campaigns"+q, nil); got != want {
+			t.Errorf("GET /v1/campaigns%s: %d, want %d", q, got, want)
+		}
+	}
+	var body campaignsResponse
+	getJSON(t, ts.URL+"/v1/campaigns?since=90d", &body)
+	if !body.Window.Capped || body.Window.Since != "720h0m0s" {
+		t.Errorf("since=90d not capped to 30d: %+v", body.Window)
+	}
+	// Without a result store there is nothing to correlate.
+	plain := newTestServer()
+	defer plain.Close()
+	if got := getJSON(t, plain.URL+"/v1/campaigns", nil); got != http.StatusNotImplemented {
+		t.Errorf("without a store: %d, want 501", got)
+	}
+}
+
+// Three messages of one campaign (same link host, different numbers in the
+// subject) and one unrelated message: one campaign of 3, and re-posting a
+// message does not grow it.
+func TestCampaignsEndToEnd(t *testing.T) {
+	ts, _ := asyncStack(t)
+	post := func(subject, link string) {
+		raw := "From: Billing <billing@sender" + subject[len(subject)-1:] + ".example>\r\nSubject: " + subject +
+			"\r\nContent-Type: text/plain\r\n\r\nSee " + link + "\r\n"
+		res, err := http.Post(ts.URL+"/v1/scans", "message/rfc822", strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		loc := res.Header.Get("Location")
+		res.Body.Close()
+		pollScan(t, ts.URL, loc)
+	}
+	post("Invoice 4471 overdue", "https://pay.evil-login.xyz/a1")
+	post("Invoice 9 overdue", "https://pay.evil-login.xyz/b2")
+	post("Invoice 120 overdue", "https://login.evil-login.xyz/c3")
+	post("Team lunch on Friday", "https://cafe.example/menu")
+	post("Invoice 9 overdue", "https://pay.evil-login.xyz/b2") // redelivered
+
+	var body campaignsResponse
+	if code := getJSON(t, ts.URL+"/v1/campaigns?min_verdict=clean", &body); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if len(body.Campaigns) != 1 || body.Campaigns[0].Size != 3 || body.Window.Scans != 4 {
+		t.Fatalf("campaigns %+v window %+v", body.Campaigns, body.Window)
+	}
+	c := body.Campaigns[0]
+	if c.Indicators[0].Scans != 3 || len(c.Subjects) != 3 || len(c.ScanIDs) != 3 {
+		t.Errorf("campaign %+v", c)
+	}
+	// These plain messages are clean; the default min_verdict hides them.
+	getJSON(t, ts.URL+"/v1/campaigns", &body)
+	if len(body.Campaigns) != 0 {
+		t.Errorf("clean campaign returned at min_verdict=suspicious: %+v", body.Campaigns)
+	}
+}

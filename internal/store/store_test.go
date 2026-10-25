@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 	"github.com/GligorcoGligorov/inspekt/internal/email"
 	"github.com/GligorcoGligorov/inspekt/internal/extract"
 	"github.com/GligorcoGligorov/inspekt/migrations"
@@ -59,6 +60,36 @@ func contract(t *testing.T, s Store) {
 		var back analyze.Report
 		if err := json.Unmarshal(r.Report, &back); err != nil || back.Signals[0].ID != "double_extension" {
 			t.Fatalf("report did not round-trip: %v %s", err, r.Report)
+		}
+	})
+	t.Run("members carry indicators and respect the window", func(t *testing.T) {
+		id := newID(t)
+		at := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+		rep := report(analyze.VerdictSuspicious, 40)
+		rep.Message.Subject = "Mailbox 98% full"
+		rep.Links = []extract.Link{{URL: "https://evil-login.xyz/a", Host: "evil-login.xyz"}}
+		if err := s.Save(ctx, Scan{ID: id, ReceivedAt: at, ScannedAt: at, Report: rep}); err != nil {
+			t.Fatal(err)
+		}
+		ms, err := s.Members(ctx, at.Add(-time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got *campaign.Member
+		for i := range ms {
+			if ms[i].ScanID == id {
+				got = &ms[i]
+			}
+		}
+		if got == nil || got.Subject != "Mailbox 98% full" || got.Verdict != analyze.VerdictSuspicious ||
+			!got.ReceivedAt.Equal(at) || len(got.Indicators) != 2 {
+			t.Fatalf("member %+v", got)
+		}
+		later, _ := s.Members(ctx, at.Add(time.Second))
+		for _, mb := range later {
+			if mb.ScanID == id {
+				t.Fatal("scan outside the window was returned")
+			}
 		}
 	})
 	t.Run("save is idempotent and keeps the first received_at", func(t *testing.T) {
