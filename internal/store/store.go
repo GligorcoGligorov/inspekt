@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 )
 
 // ErrNotFound means no result is stored for that id.
@@ -59,6 +60,7 @@ func (s Scan) record() (*Record, error) {
 type Memory struct {
 	mu   sync.Mutex
 	recs map[string]*Record
+	inds map[string][]campaign.Indicator
 }
 
 func (m *Memory) Save(_ context.Context, s Scan) error {
@@ -69,12 +71,13 @@ func (m *Memory) Save(_ context.Context, s Scan) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.recs == nil {
-		m.recs = map[string]*Record{}
+		m.recs, m.inds = map[string]*Record{}, map[string][]campaign.Indicator{}
 	}
 	if old, ok := m.recs[s.ID]; ok {
 		r.ReceivedAt = old.ReceivedAt // first acceptance wins, as in MariaDB
 	}
 	m.recs[s.ID] = r
+	m.inds[s.ID] = campaign.Extract(s.Report) // replaced, never appended: idempotent
 	return nil
 }
 

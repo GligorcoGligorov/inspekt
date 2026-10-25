@@ -15,6 +15,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/GligorcoGligorov/inspekt/internal/analyze"
+	"github.com/GligorcoGligorov/inspekt/internal/campaign"
 )
 
 // MariaDB stores results in the scans and signals tables (see migrations/).
@@ -56,7 +57,7 @@ func (m *MariaDB) Save(ctx context.Context, s Scan) error {
 		from = sql.NullString{String: msg.From.Domain, Valid: true}
 	}
 	for attempt := 1; ; attempt++ {
-		err = m.save(ctx, r, from, s.Report.Signals)
+		err = m.save(ctx, r, from, s.Report.Signals, campaign.Extract(s.Report))
 		if attempt == 3 || !retryable(err) {
 			return err
 		}
@@ -68,12 +69,41 @@ func (m *MariaDB) Save(ctx context.Context, s Scan) error {
 	}
 }
 
+// saveIndicators writes the scan's campaign indicators in the caller's
+// transaction, with the same rule as signals: a re-save replaces them, a new
+// scan only inserts (no DELETE, so no gap locks between workers).
+// created_at is the stored received_at, which a re-save does not change.
+func saveIndicators(ctx context.Context, tx *sql.Tx, id string, resave bool, inds []campaign.Indicator) error {
+	if resave {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM scan_indicators WHERE scan_id = ?`, id); err != nil {
+			return fmt.Errorf("store: clear indicators: %w", err)
+		}
+	}
+	if len(inds) == 0 {
+		return nil
+	}
+	var received time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT received_at FROM scans WHERE id = ?`, id).Scan(&received); err != nil {
+		return fmt.Errorf("store: read received_at: %w", err)
+	}
+	q := "INSERT INTO scan_indicators (scan_id, kind, value, created_at) VALUES " +
+		strings.TrimSuffix(strings.Repeat("(?, ?, ?, ?),", len(inds)), ",")
+	args := make([]any, 0, 4*len(inds))
+	for _, ind := range inds {
+		args = append(args, id, ind.Kind, ind.Value, received)
+	}
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("store: save indicators: %w", err)
+	}
+	return nil
+}
+
 func retryable(err error) bool {
 	var me *mysql.MySQLError
 	return errors.As(err, &me) && (me.Number == 1213 || me.Number == 1205)
 }
 
-func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs []analyze.Signal) error {
+func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs []analyze.Signal, inds []campaign.Indicator) error {
 	tx, err := m.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -95,10 +125,14 @@ func (m *MariaDB) save(ctx context.Context, r *Record, from sql.NullString, sigs
 	// DELETE matters. Deleting rows that do not exist still takes InnoDB
 	// gap locks, which collided with other workers' inserts and deadlocked
 	// under load. Only a re-save (2 = updated, 0 = unchanged) clears rows.
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, _ := res.RowsAffected()
+	if n != 1 {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM signals WHERE scan_id = ?`, r.ID); err != nil {
 			return fmt.Errorf("store: clear signals: %w", err)
 		}
+	}
+	if err := saveIndicators(ctx, tx, r.ID, n != 1, inds); err != nil {
+		return err
 	}
 	if len(sigs) > 0 {
 		q := "INSERT INTO signals (scan_id, signal_id, score) VALUES " +
