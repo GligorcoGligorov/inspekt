@@ -26,12 +26,13 @@ type campaignsResponse struct {
 }
 
 type campaignWindow struct {
-	Since   string         `json:"since"` // effective window, after the 30d cap
-	From    time.Time      `json:"from"`
-	Scans   int            `json:"scans"`
-	Limit   int            `json:"guard_limit"`   // values shared by more scans were ignored
-	Dropped map[string]int `json:"guard_dropped"` // ignored values per kind
-	Capped  bool           `json:"since_capped,omitempty"`
+	Since     string         `json:"since"` // effective window, after the 30d cap
+	From      time.Time      `json:"from"`
+	Scans     int            `json:"scans"`
+	Limit     int            `json:"guard_limit"`   // values shared by more scans were ignored
+	Dropped   map[string]int `json:"guard_dropped"` // ignored values per kind
+	Oversized int            `json:"oversized"`     // clusters above the size cap (returned, flagged)
+	Capped    bool           `json:"since_capped,omitempty"`
 }
 
 // campaigns clusters the scans of a recent window into campaigns. It is a
@@ -86,7 +87,7 @@ func (s *Server) campaigns(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, campaignsResponse{
 		Window: campaignWindow{Since: since.String(), From: from.UTC(), Scans: res.Scans,
-			Limit: res.Limit, Dropped: res.Dropped, Capped: capped},
+			Limit: res.Limit, Dropped: res.Dropped, Oversized: res.Oversized, Capped: capped},
 		Campaigns: res.Campaigns,
 	})
 }

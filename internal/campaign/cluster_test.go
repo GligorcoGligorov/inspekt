@@ -24,12 +24,16 @@ const (
 	mal   = analyze.VerdictMalicious
 )
 
+func subj(v string) Indicator { return Indicator{SubjectFP, v} }
+func file(v string) Indicator { return Indicator{AttachmentSHA, v} }
+
 func TestClusterIsTransitive(t *testing.T) {
-	// a-b share a host, b-c share an IP: one campaign of 3; d is alone.
+	// a-b share a strong attachment; b-c share two weak kinds (host and
+	// subject); d shares only a host with c (one weak kind): not linked.
 	res := Cluster([]Member{
-		m("c", mal, 3, ip("151.101.1.69")),
-		m("a", mal, 1, host("evil-login.xyz")),
-		m("b", clean, 2, host("evil-login.xyz"), ip("151.101.1.69")),
+		m("c", mal, 3, host("evil-login.xyz"), subj("s1"), host("other.example")),
+		m("a", mal, 1, file("f1")),
+		m("b", clean, 2, file("f1"), host("evil-login.xyz"), subj("s1")),
 		m("d", mal, 4, host("other.example")),
 	}, Options{})
 	if len(res.Campaigns) != 1 {
@@ -42,16 +46,54 @@ func TestClusterIsTransitive(t *testing.T) {
 	if c.Verdicts[mal] != 2 || c.Verdicts[clean] != 1 || c.MaxVerdict != mal {
 		t.Errorf("verdicts %v max %s", c.Verdicts, c.MaxVerdict)
 	}
-	if c.ID != Cluster([]Member{m("a", mal, 0, host("x.example")), m("zzz", mal, 0, host("x.example"))}, Options{}).Campaigns[0].ID {
+	if c.ID != Cluster([]Member{m("a", mal, 0, file("x")), m("zzz", mal, 0, file("x"))}, Options{}).Campaigns[0].ID {
 		t.Error("campaign id must depend only on the smallest scan id")
+	}
+}
+
+// The redesign: one weak value never links two scans on its own.
+func TestStrongAndWeakLinking(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []Indicator
+		link bool
+	}{
+		{"strong attachment alone", []Indicator{file("f")}, []Indicator{file("f")}, true},
+		{"strong full_url alone", []Indicator{{FullURL, "https://bit.ly/x"}}, []Indicator{{FullURL, "https://bit.ly/x"}}, true},
+		{"link host + subject", []Indicator{host("h"), subj("s")}, []Indicator{host("h"), subj("s")}, true},
+		{"sender ip + link host", []Indicator{ip("1.2.3.4"), host("h")}, []Indicator{ip("1.2.3.4"), host("h")}, true},
+		{"one weak: link host only", []Indicator{host("h")}, []Indicator{host("h")}, false},
+		{"one weak: relay ip only", []Indicator{ip("1.2.3.4")}, []Indicator{ip("1.2.3.4")}, false},
+		{"two values of the same weak kind", []Indicator{host("h1"), host("h2")}, []Indicator{host("h1"), host("h2")}, false},
+	}
+	for _, c := range cases {
+		res := Cluster([]Member{m("a", mal, 0, c.a...), m("b", mal, 1, c.b...)}, Options{})
+		if (len(res.Campaigns) == 1) != c.link {
+			t.Errorf("%s: linked=%v, want %v", c.name, len(res.Campaigns) == 1, c.link)
+		}
+	}
+}
+
+// The hard cap marks, it does not cut.
+func TestOversizedIsMarkedNotCut(t *testing.T) {
+	var ms []Member
+	for i := range 12 {
+		ms = append(ms, m(fmt.Sprintf("s%02d", i), mal, i, file("same-attachment")))
+	}
+	res := Cluster(ms, Options{MaxSize: 10, MaxShared: 100})
+	if res.Oversized != 1 || len(res.Campaigns) != 1 || res.Campaigns[0].Size != 12 || !res.Campaigns[0].Oversized || res.Campaigns[0].Note == "" {
+		t.Fatalf("oversized %d, campaigns %+v", res.Oversized, res.Campaigns)
+	}
+	if small := Cluster(ms, Options{MaxShared: 100}); small.Oversized != 0 || small.Campaigns[0].Oversized {
+		t.Error("12 scans flagged under the default cap of 500")
 	}
 }
 
 // A missed phish (clean) joins its caught sibling, and the campaign passes
 // a min_verdict filter because of its highest member.
 func TestMinVerdictUsesHighestMember(t *testing.T) {
-	ms := []Member{m("a", clean, 1, host("evil.example")), m("b", mal, 2, host("evil.example")),
-		m("c", clean, 3, host("benign.example")), m("d", clean, 4, host("benign.example"))}
+	ms := []Member{m("a", clean, 1, file("evil")), m("b", mal, 2, file("evil")),
+		m("c", clean, 3, file("benign")), m("d", clean, 4, file("benign"))}
 	res := Cluster(ms, Options{MinVerdict: susp})
 	if len(res.Campaigns) != 1 || res.Campaigns[0].Size != 2 || res.Campaigns[0].ScanIDs[0] != "a" {
 		t.Fatalf("got %+v", res.Campaigns)
@@ -69,18 +111,18 @@ func TestMinVerdictUsesHighestMember(t *testing.T) {
 func TestGiantClusterGuard(t *testing.T) {
 	var ms []Member
 	for i := range 30 { // 30 unrelated scans all relayed through one IP
-		ms = append(ms, m(fmt.Sprintf("s%02d", i), mal, i, ip("8.8.4.4"), host(fmt.Sprintf("h%d.example", i))))
+		ms = append(ms, m(fmt.Sprintf("s%02d", i), mal, i, file("relay-banner"), host(fmt.Sprintf("h%d.example", i))))
 	}
-	ms = append(ms, m("x1", mal, 40, host("h1.example"))) // a real 2-scan pair
-	res := Cluster(ms, Options{})                         // limit max(20, 5% of 31) = 20
-	if res.Limit != 20 || res.Dropped[SenderIP] != 1 {
+	ms = append(ms, m("x1", mal, 40, file("h1-file")), m("x2", mal, 41, file("h1-file"))) // a real 2-scan pair
+	res := Cluster(ms, Options{})                                                         // limit max(20, 5% of 31) = 20
+	if res.Limit != 20 || res.Dropped[AttachmentSHA] != 1 {
 		t.Fatalf("limit %d dropped %v", res.Limit, res.Dropped)
 	}
 	if len(res.Campaigns) != 1 || res.Campaigns[0].Size != 2 {
 		t.Fatalf("campaigns %+v", res.Campaigns)
 	}
-	// Raising the limit lets the shared IP chain all 30 into one.
-	if big := Cluster(ms, Options{MaxShared: 100}); big.Campaigns[0].Size != 31 {
+	// Raising the limit lets the shared value chain all 30 into one.
+	if big := Cluster(ms, Options{MaxShared: 100}); big.Campaigns[0].Size != 30 {
 		t.Errorf("with the guard off: %+v", big.Campaigns[0].Size)
 	}
 	// The 5 % share wins once the window is large.

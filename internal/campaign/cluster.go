@@ -3,6 +3,7 @@ package campaign
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"math/bits"
 	"sort"
 	"time"
 
@@ -31,6 +32,9 @@ type Options struct {
 	MinSize    int             // default 2
 	MinVerdict analyze.Verdict // keep campaigns whose highest verdict is at least this; default clean (all)
 	MaxScanIDs int             // scan ids listed per campaign; 0 = all
+	// MaxSize is a safety net: a cluster larger than this is kept but marked
+	// Oversized ("likely shared infrastructure") and counted separately.
+	MaxSize int // default 500
 }
 
 // Shared is an indicator and how many of the campaign's scans carry it.
@@ -52,6 +56,8 @@ type Campaign struct {
 	Subjects   []string                `json:"subjects"`   // up to 3 examples
 	ScanIDs    []string                `json:"scan_ids"`   // smallest first
 	MoreScans  int                     `json:"more_scans,omitempty"`
+	Oversized  bool                    `json:"oversized,omitempty"` // above MaxSize: likely shared infrastructure
+	Note       string                  `json:"note,omitempty"`
 }
 
 // Result is a clustering of one window.
@@ -59,8 +65,12 @@ type Result struct {
 	Scans     int            // scans in the window
 	Limit     int            // values shared by more scans than this were ignored
 	Dropped   map[string]int // values ignored by the guard, per kind
+	Oversized int            // clusters above MaxSize (returned, flagged)
 	Campaigns []Campaign     // sorted: largest first
 }
+
+// Weak kinds as bits, to count distinct kinds shared by a pair.
+var weakBit = map[string]uint8{LinkHost: 1, SenderIP: 2, SubjectFP: 4}
 
 var verdictRank = map[analyze.Verdict]int{analyze.VerdictClean: 0, analyze.VerdictSuspicious: 1, analyze.VerdictMalicious: 2}
 
@@ -70,8 +80,12 @@ const (
 	subjectChars    = 80
 )
 
-// Cluster groups members into campaigns: two scans are in the same campaign
-// if they share an indicator, directly or through other scans (union-find).
+// Cluster groups members into campaigns (union-find). Two scans are linked
+// if they share one strong indicator (the same attachment, the same page on
+// a shortener or shared host), or weak indicators of at least two different
+// kinds (e.g. the same link domain and the same subject pattern). One weak
+// value alone links nothing: shared relays and common domains no longer
+// chain unrelated mail. Linked scans are grouped transitively.
 func Cluster(members []Member, opt Options) Result {
 	if opt.MaxShared == 0 {
 		opt.MaxShared = 20
@@ -85,6 +99,9 @@ func Cluster(members []Member, opt Options) Result {
 	if opt.MinVerdict == "" {
 		opt.MinVerdict = analyze.VerdictClean
 	}
+	if opt.MaxSize == 0 {
+		opt.MaxSize = 500
+	}
 	res := Result{Scans: len(members), Dropped: map[string]int{}}
 	res.Limit = max(opt.MaxShared, int(opt.MaxShare*float64(len(members))))
 
@@ -97,15 +114,37 @@ func Cluster(members []Member, opt Options) Result {
 	}
 	uf := newUnionFind(len(members))
 	kept := map[Indicator]bool{}
+	// For weak values: which weak kinds each pair of scans shares. Built from
+	// the inverted index; the guard caps every value's carriers at Limit, so
+	// pairs per value are bounded.
+	pairKinds := map[[2]int]uint8{}
 	for ind, scans := range carriers {
 		switch {
 		case len(scans) > res.Limit:
 			res.Dropped[ind.Kind]++
 		case len(scans) > 1:
 			kept[ind] = true
-			for _, s := range scans[1:] {
-				uf.union(scans[0], s)
+			if Strong(ind.Kind) {
+				for _, s := range scans[1:] {
+					uf.union(scans[0], s)
+				}
+				continue
 			}
+			bit := weakBit[ind.Kind]
+			for x := 0; x < len(scans); x++ {
+				for y := x + 1; y < len(scans); y++ {
+					a, b := scans[x], scans[y]
+					if a > b {
+						a, b = b, a
+					}
+					pairKinds[[2]int{a, b}] |= bit
+				}
+			}
+		}
+	}
+	for pair, kinds := range pairKinds {
+		if bits.OnesCount8(kinds) >= 2 {
+			uf.union(pair[0], pair[1])
 		}
 	}
 
@@ -119,6 +158,10 @@ func Cluster(members []Member, opt Options) Result {
 			continue
 		}
 		c := summarise(members, g, kept, opt.MaxScanIDs)
+		if c.Size > opt.MaxSize {
+			c.Oversized, c.Note = true, "oversized: likely shared infrastructure, not one attack"
+			res.Oversized++
+		}
 		if verdictRank[c.MaxVerdict] >= verdictRank[opt.MinVerdict] {
 			res.Campaigns = append(res.Campaigns, c)
 		}

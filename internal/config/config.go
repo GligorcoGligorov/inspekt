@@ -121,7 +121,8 @@ func LLM() string {
 
 // CampaignGuard reads the giant-cluster guard: indicator values shared by
 // more than max(INSPEKT_CAMPAIGN_MAX_SHARED, INSPEKT_CAMPAIGN_MAX_SHARE ×
-// scans in the window) are ignored (defaults 20 and 0.05).
+// scans in the window) are ignored (defaults 20 and 0.05), and clusters
+// above INSPEKT_CAMPAIGN_MAX_SIZE (default 500) are marked oversized.
 func CampaignGuard() (campaign.Options, error) {
 	n, err := Int("INSPEKT_CAMPAIGN_MAX_SHARED", 20)
 	if err != nil {
@@ -135,7 +136,11 @@ func CampaignGuard() (campaign.Options, error) {
 		}
 		share = f
 	}
-	return campaign.Options{MaxShared: n, MaxShare: share}, nil
+	size, err := Int("INSPEKT_CAMPAIGN_MAX_SIZE", 500)
+	if err != nil {
+		return campaign.Options{}, err
+	}
+	return campaign.Options{MaxShared: n, MaxShare: share, MaxSize: size}, nil
 }
 
 // AuthMode is INSPEKT_AUTH_MODE with its default applied.
