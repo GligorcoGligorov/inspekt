@@ -33,6 +33,7 @@ type splitResult struct {
 func main() {
 	maxShared := flag.Int("max-shared", 20, "giant-cluster guard: absolute limit")
 	maxShare := flag.Float64("max-share", 0.05, "giant-cluster guard: share of scans in the window")
+	maxSize := flag.Int("max-size", 500, "clusters above this size are marked oversized")
 	flag.Parse()
 
 	// The scoring engine with the default rules (no LLM): verdicts here are
@@ -70,7 +71,7 @@ func main() {
 	for _, s := range splits {
 		ms := members[s]
 		res := campaign.Cluster(ms, campaign.Options{MaxShared: *maxShared, MaxShare: *maxShare,
-			MinSize: 2, MinVerdict: analyze.VerdictClean})
+			MaxSize: *maxSize, MinSize: 2, MinVerdict: analyze.VerdictClean})
 		distinct := map[campaign.Indicator]bool{}
 		byKind := map[string]int{}
 		for _, m := range ms {
