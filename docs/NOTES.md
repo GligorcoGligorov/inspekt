@@ -867,13 +867,32 @@ Some values are shared by everyone: a big mail provider's server, a link to
 a popular site. If those counted, everything would be "one campaign". So a
 value shared by more than max(20, 5 % of the emails) is ignored.
 
-**What the measurement taught us:** that is not enough. The guard checks
-each value alone, but union-find chains: two hundred emails through relay
-IP one, one of which shares relay IP two with a hundred more, and so on.
-On the public data this built one "campaign" of 3,257 emails, mostly
-2002 mailing-list mail. The fix is a design decision we have not made yet
-(cap the size of a group, use the full public-suffix list, require two
-shared indicators, or drop the IP).
+**What the first measurement taught us:** that is not enough. The guard
+checks each value alone, but union-find chains: two hundred emails through
+relay IP one, one of which shares relay IP two with a hundred more, and so
+on. On the public data this built one "campaign" of 3,257 emails, mostly
+2002 mailing-list mail.
+
+**The redesign** (decided before measuring again):
+
+- **Strong vs weak.** Some evidence is specific enough on its own: the same
+  attachment, or the same page on a link shortener or free hosting. Other
+  evidence is common: a sending server, a subject pattern, a domain. Strong
+  evidence links two emails alone; weak evidence needs **two different
+  kinds** to agree (same domain *and* same subject pattern). One relay IP
+  can no longer glue mailing lists to phishing.
+- **The full public-suffix list**, so `shop.co.za` and `bank.co.za` are
+  different domains (the old table thought both were "co.za").
+- **Ignore the recipient's own domain** in links (it says who received the
+  mail, not who sent it).
+- **A size alarm:** a group above 500 is shown as "oversized, likely
+  infrastructure" instead of being trusted.
+
+Result on the held-out data: no legitimate email shared a campaign with
+phishing (0 of 793), and the biggest phishing campaigns were real attacks
+(fake DocuSign receipts, Netflix billing lures). The honest caveat: our
+legitimate mail is from 2002, so it can hardly match modern phishing
+anyway.
 
 ### Why compute-on-read, and when it stops scaling
 
@@ -893,11 +912,11 @@ instead: update them as each email is saved, or run a streaming job.
   together with phishing. If this is high, following campaigns would drag
   innocent mail into an investigation.
 
-On our data both are inflated by the one giant chain (48.8 % of missed
-phishing "assisted", 71.6 % of ham "contaminated" on dev), so the honest
-reading is: the mechanism works on real campaigns (we saw groups of 24 and
-17 genuine phishing emails), but the grouping rules need fixing before the
-numbers mean anything.
+With the first design both were inflated by the one giant chain (48.8 %
+of missed phishing "assisted", 71.6 % of ham "contaminated" on dev). After
+the redesign, on the held-out data: 9 of 248 missed phishing emails
+(3.63 %) sit in a campaign with caught phishing, and 0 of 793 legitimate
+emails share a campaign with phishing. Smaller, but real.
 
 ### Interview questions
 
@@ -910,15 +929,19 @@ numbers mean anything.
 2. **"What goes wrong with naive clustering on real mail?"**
    Shared infrastructure. A popular link or a provider's IP connects
    unrelated mail, and because grouping is transitive, a few such values
-   merge everything. A per-value threshold helps, but our measurement
-   showed it is not enough: a chain of many medium-common values still
-   made one group of 3,257 emails. You need a limit on the group, not
-   just on the value, and good normalisation (the public-suffix list).
+   merge everything. A per-value threshold was not enough: a chain of
+   many medium-common values made one group of 3,257 emails. What fixed
+   it was separating strong from weak evidence (weak needs two different
+   kinds to agree), the public-suffix list, ignoring the recipient's own
+   domain, and an alarm on group size.
 
-3. **"Your 'campaign-assisted recall' was 48.8 %. Why don't you claim it?"**
-   Because almost all of it came from that giant artifact group. Reporting
-   it as a win would be fitting a story to a bug. I report the raw number,
-   explain why it is an artifact, and propose fixes to measure next.
+3. **"Your first 'campaign-assisted recall' was 48.8 %, now it is 3.6 %.
+   Isn't that worse?"**
+   The 48.8 % came almost entirely from one artifact group that also
+   swallowed most legitimate mail, so it was never real. The redesign was
+   decided from the diagnosis before re-measuring, then checked once on
+   held-out data: 3.63 % assisted, 0 % legitimate mail contaminated. A
+   small real number beats a large fake one.
 
 4. **"Why compute campaigns on read instead of storing them?"**
    It is simple and can never be stale or inconsistent: the indicators are
