@@ -54,6 +54,30 @@ step "the demo page is served"
 curl -sf "$BASE/" | grep -q "<title>Inspekt</title>" || fail "GET / did not serve the demo page"
 echo ok
 
+step "campaigns: 5 emails of one attack become one campaign; 3 unrelated stay apart"
+# Runs first, on an empty store: later steps post samples that correlate
+# with each other (two of them link to the same lookalike host).
+camp=$(mktemp -d)
+for i in 1 2 3 4 5; do
+	printf 'From: Mail Admin <admin@notice%s.example>\r\nTo: user@example.org\r\nSubject: Your mailbox is full (%s%s7 messages held)\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Your mailbox is full. <a href="https://login.evil-login.xyz/release?u=%s">Release messages</a></p>\r\n' \
+		"$i" "$i" "$i" "$i" >"$camp/phish$i.eml"
+done
+printf 'From: Cafe <menu@cafe.example>\r\nSubject: Lunch menu for Friday\r\nContent-Type: text/plain\r\n\r\nSee https://cafe.example/menu\r\n' >"$camp/u1.eml"
+printf 'From: HR <hr@example.org>\r\nSubject: Holiday calendar published\r\nContent-Type: text/plain\r\n\r\nSee https://intranet.example.org/holidays\r\n' >"$camp/u2.eml"
+printf 'From: Shop <news@shop.example>\r\nSubject: Autumn sale starts today\r\nContent-Type: text/plain\r\n\r\nSee https://shop.example/sale\r\n' >"$camp/u3.eml"
+for f in "$camp"/*.eml; do result "$(post "$f")" >/dev/null; done
+campaigns() { curl -sf "$BASE/v1/campaigns?since=1h&min_verdict=clean"; }
+got=$(campaigns) || fail "GET /v1/campaigns"
+[ "$(jq '[.campaigns[] | .size]' <<<"$got" | tr -d ' \n')" = "[5]" ] ||
+	fail "want exactly one campaign of size 5, got $(jq -c '[.campaigns[] | {size, indicators}]' <<<"$got")"
+first=$(jq -r '.campaigns[0].id' <<<"$got")
+post "$camp/phish3.eml" >/dev/null # redelivered: same scan, no new indicator rows
+again=$(campaigns)
+[ "$(jq -c '[.campaigns[] | {id, size}]' <<<"$again")" = "[{\"id\":\"$first\",\"size\":5}]" ] ||
+	fail "after re-posting: $(jq -c '[.campaigns[] | {id, size}]' <<<"$again")"
+rm -rf "$camp"
+echo "ok one campaign $first of 5: $(jq -c '[.campaigns[0].indicators[] | "\(.kind)=\(.value)"]' <<<"$again")"
+
 step "phishing and clean samples are analysed by the worker"
 phish=$(post testdata/phish_lookalike.eml)
 expect "$phish" done malicious
