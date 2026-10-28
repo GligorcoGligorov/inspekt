@@ -56,7 +56,7 @@ I built Inspekt over one weekend with AI as the implementation partner: Claude (
 
 The decisions were mine: the order of the steps, the LLM provider and what data may leave the system, that public corpora are never sent to an LLM, that the LLM stays off unless explicitly enabled, and that every number is reported as measured. The implementation followed fixed rules. Every step ends with green tests and its own commit, and CI must pass before the next step. Bugs are fixed in separate commits with a test that fails on the old code. Detection weights change only on evaluation data, decided on the dev split and confirmed once on the holdout.
 
-I tested the running system myself (API, queue, Grafana, the demo page and the Groq integration). `docs/NOTES.md` explains each step in plain language with interview questions; it is what I use to study the design. The commit history shows the order of work, including the bugs the evaluation and load tests found.
+I tested the running system myself (API, queue, Grafana, the demo page and the Groq integration). The commit history shows the order of work, including the bugs the evaluation and load tests found.
 
 ## Quick start
 
@@ -541,7 +541,6 @@ In order of expected impact on the measured weaknesses:
 
 - [`docs/EVAL.md`](docs/EVAL.md): corpora, method, every result, analysis, decisions
 - [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md): micro-benchmarks, profiling, load test
-- [`docs/NOTES.md`](docs/NOTES.md): each step explained simply, with interview questions
 
 ## License
 
