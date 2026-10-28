@@ -236,7 +236,7 @@ func TestSamples(t *testing.T) {
 		{"malware_attachment.eml", VerdictMalicious, []string{"double_extension", "html_attachment"}},
 		// Known gap: a text-only BEC from a correctly authenticated domain
 		// has almost no technical signals. Rules alone cannot catch it;
-		// this is what the LLM stage (WEEKEND_PLAN step 6) is for.
+		// this is what the grey-zone LLM review (internal/llm) is for.
 		{"bec_reply_to.eml", VerdictClean, []string{"reply_to_mismatch"}},
 		// The phishing URL exists only in a QR image (step 4).
 		{"qr_phish.eml", VerdictSuspicious, []string{"qr_code_link", "lookalike_link"}},

@@ -52,7 +52,7 @@ testdata/phish_lookalike.eml
 
 ## How I built this
 
-I built Inspekt over one weekend with AI as the implementation partner: Claude (chat) for planning and the initial skeleton, and [Claude Code](https://claude.com/claude-code) for the implementation. I chose the problem and the target, a scan pipeline for email security, and directed the work step by step from the plan in `docs/WEEKEND_PLAN.md`.
+I built Inspekt over one weekend with AI as the implementation partner: Claude (chat) for planning and the initial skeleton, and [Claude Code](https://claude.com/claude-code) for the implementation. I chose the problem and the target, a scan pipeline for email security, and directed the work step by step.
 
 The decisions were mine: the order of the steps, the LLM provider and what data may leave the system, that public corpora are never sent to an LLM, that the LLM stays off unless explicitly enabled, and that every number is reported as measured. The implementation followed fixed rules. Every step ends with green tests and its own commit, and CI must pass before the next step. Bugs are fixed in separate commits with a test that fails on the old code. Detection weights change only on evaluation data, decided on the dev split and confirmed once on the holdout.
 
@@ -542,7 +542,6 @@ In order of expected impact on the measured weaknesses:
 - [`docs/EVAL.md`](docs/EVAL.md): corpora, method, every result, analysis, decisions
 - [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md): micro-benchmarks, profiling, load test
 - [`docs/NOTES.md`](docs/NOTES.md): each step explained simply, with interview questions
-- [`docs/WEEKEND_PLAN.md`](docs/WEEKEND_PLAN.md): the build plan
 
 ## License
 

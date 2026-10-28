@@ -7,7 +7,7 @@ Sample corpus shipped with the repo:
 
     python3 eval/evaluate.py --labels testdata/labels.csv
 
-Public corpora (see docs/WEEKEND_PLAN.md, step 4):
+Public corpora (see docs/EVAL.md, "Corpora"; download with eval/fetch_corpora.sh):
 
     python3 eval/evaluate.py --ham data/ham --phish data/phish \
         --min-recall 0.80 --max-fpr 0.02 --out eval/report
